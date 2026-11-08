@@ -516,7 +516,7 @@ struct TopRow: View {
         .frame(height: 30)
         .onAppear { DispatchQueue.main.async { TopRow.float(onTop) } }
     }
-    static func float(_ on: Bool) { for w in NSApp.windows where w.title.hasPrefix("Agent Manager (Mantra)") { w.level = on ? .floating : .normal } }
+    static func float(_ on: Bool) { for w in NSApp.windows where w.identifier?.rawValue == "agentmanager" { w.level = on ? .floating : .normal } }
 }
 
 struct Root: View {
@@ -581,7 +581,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         let host = NSHostingView(rootView: Root(m: model))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-        window.title = "Agent Manager (Mantra)"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
+        window.title = ""; window.identifier = NSUserInterfaceItemIdentifier("agentmanager"); window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
         window.contentView = host; window.minSize = NSSize(width: 620, height: 480); window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("AgentManagerWindow"); window.backgroundColor = NSColor(Ink.ground)
         // --shot <png>: drawn off screen at the minimum size (sample data, no network, nothing stored); --shot-live: the real data once
