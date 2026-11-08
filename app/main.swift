@@ -281,13 +281,15 @@ struct TaskRow: View {
     }
 }
 
+func st(_ t: J) -> String { t["status"] as? String ?? "todo" }
+func cnt(_ all: [J], _ s: String) -> Int { all.filter { ($0["status"] as? String) == s }.count }
+
 struct PlanCard: View {
     @ObservedObject var m: Model
     let p: J
     var body: some View {
         let tasks = (p["tasks"] as? [J]) ?? []
         let slug = p["slug"] as? String ?? ""
-        func st(_ t: J) -> String { t["status"] as? String ?? "todo" }
         let done = tasks.filter { st($0) == "done" }.count, run = tasks.filter { st($0) == "running" }.count
         let nowT = tasks.filter { st($0) == "running" || st($0) == "paused" }.map { "\($0["n"] as? Int ?? 0)" }
         let nextT = tasks.filter { st($0) == "todo" }.prefix(3).map { "\($0["n"] as? Int ?? 0)" }
@@ -300,9 +302,19 @@ struct PlanCard: View {
                 mono("DONE  " + (doneT.isEmpty ? "none yet" : doneT.joined(separator: ", ")), Ink.green, 11)
                 mono("NEXT  " + (nextT.isEmpty ? "nothing waiting" : nextT.joined(separator: ", ")), Ink.dim, 11)
             }.padding(.bottom, 4)
-            ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
-                TaskRow(m: m, slug: slug, t: t, cmds: (p["commands"] as? [J]) ?? [])
-                if i < tasks.count - 1 { Rectangle().fill(Ink.line).frame(height: 1) }
+            let cmds = (p["commands"] as? [J]) ?? []
+            let focus = tasks.first { ($0["focus"] as? Bool) == true }
+            let rest = tasks.filter { ($0["focus"] as? Bool) != true }
+            if let f = focus {
+                Text("IN FOCUS").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.amber)
+                TaskRow(m: m, slug: slug, t: f, cmds: cmds).padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Ink.amber.opacity(0.08)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.amber.opacity(0.5), lineWidth: 1))
+                Text("BACKGROUND").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey).padding(.top, 4)
+            }
+            ForEach(Array(rest.enumerated()), id: \.offset) { i, t in
+                TaskRow(m: m, slug: slug, t: t, cmds: cmds)
+                if i < rest.count - 1 { Rectangle().fill(Ink.line).frame(height: 1) }
             }
         }
     }
@@ -312,12 +324,11 @@ struct TotalsStrip: View {
     let plans: [J]; let d: J
     var body: some View {
         let all = plans.flatMap { ($0["tasks"] as? [J]) ?? [] }
-        func c(_ s: String) -> Int { all.filter { ($0["status"] as? String) == s }.count }
         let sess = ((d["mac"] as? J)?["sessions"] as? [J])?.count ?? 0
         let vmUp = ((d["vm"] as? J)?["ok"] as? Bool) ?? false
         HStack(spacing: 0) {
-            ForEach(Array([("DONE", c("done"), Ink.green), ("RUNNING", c("running"), Ink.amber), ("PAUSED", c("paused"), Ink.dim),
-                           ("FAILED", c("failed"), Ink.red), ("TO DO", c("todo"), Ink.grey), ("SESSIONS", sess, Ink.text)].enumerated()), id: \.offset) { _, x in
+            ForEach(Array([("DONE", cnt(all, "done"), Ink.green), ("RUNNING", cnt(all, "running"), Ink.amber), ("PAUSED", cnt(all, "paused"), Ink.dim),
+                           ("FAILED", cnt(all, "failed"), Ink.red), ("TO DO", cnt(all, "todo"), Ink.grey), ("SESSIONS", sess, Ink.text)].enumerated()), id: \.offset) { _, x in
                 VStack(spacing: 2) {
                     Text("\(x.1)").font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(x.2)
                     Text(x.0).font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey)
@@ -515,7 +526,7 @@ struct Root: View {
 
 // ---------------------------------------------------------------- app
 let sampleJSON = """
-{"time":"12:00:00","mac":{"ok":true,"settings":{"model":"opus[1m]","effort_default":"medium","rc_at_startup":true,"router_plugin":true,"usage":{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":2000000000},"seven_day":{"used_percentage":35,"resets_at":2000000000}}}},"plans":[{"slug":"example","project":"Example project","goal":"A plan is divided into tasks, each ticked when checked","age":30,"tasks":[{"n":1,"title":"Collector helper","agent":"a1cc","status":"done","checked":true,"report":"done and checked","next":""},{"n":2,"title":"Swift window with a long title that has to wrap and never be cut","agent":"a2dd","status":"running","checked":false,"report":"Half way: cards and bars drawn.","next":"controls"},{"n":3,"title":"Paused job","agent":"a3ee","status":"paused","checked":false,"report":"","next":""},{"n":4,"title":"Publish","agent":"","status":"todo","checked":false,"report":"","next":""},{"n":5,"title":"A failed one","agent":"a5","status":"failed","checked":false,"report":"","next":""}],"commands":[]}],"sessions":[{"modes":{"model":"Opus 5.5","effort":"medium","permission":"auto","rc":true,"router":"off","ctx":30,"sp":12,"sx":"3h","wp":35,"wx":"5d","mcp":[]},"name":"MAC_SES9_08-NOV (Example)","status":"busy","folder":"~/Developer/claude-code","last":"a prompt, shortened to two lines at most","tasks_running":1,"tasks_total":2,"tasks":[{"id":"a1b2c3","kind":"agent","running":true,"age":12,"desc":"Star app: Agent Manager"},{"id":"bx9","kind":"shell","running":false,"age":3600,"desc":"15:38:10 push started"}]},{"name":"MAC_SES8_08-NOV (GitHub)","status":"idle","folder":"~/Developer/claude-code","last":"","tasks_running":0,"tasks_total":0,"tasks":[]}],"other":[]},
+{"time":"12:00:00","mac":{"ok":true,"settings":{"model":"opus[1m]","effort_default":"medium","rc_at_startup":true,"router_plugin":true,"usage":{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":2000000000},"seven_day":{"used_percentage":35,"resets_at":2000000000}}}},"plans":[{"slug":"example","project":"Example project","goal":"A plan is divided into tasks, each ticked when checked","age":30,"tasks":[{"n":1,"title":"Collector helper","agent":"a1cc","status":"done","checked":true,"report":"done and checked","next":""},{"n":2,"focus":true,"title":"Swift window with a long title that has to wrap and never be cut","agent":"a2dd","status":"running","checked":false,"report":"Half way: cards and bars drawn.","next":"controls"},{"n":3,"title":"Paused job","agent":"a3ee","status":"paused","checked":false,"report":"","next":""},{"n":4,"title":"Publish","agent":"","status":"todo","checked":false,"report":"","next":""},{"n":5,"title":"A failed one","agent":"a5","status":"failed","checked":false,"report":"","next":""}],"commands":[]}],"sessions":[{"modes":{"model":"Opus 5.5","effort":"medium","permission":"auto","rc":true,"router":"off","ctx":30,"sp":12,"sx":"3h","wp":35,"wx":"5d","mcp":[]},"name":"MAC_SES9_08-NOV (Example)","status":"busy","folder":"~/Developer/claude-code","last":"a prompt, shortened to two lines at most","tasks_running":1,"tasks_total":2,"tasks":[{"id":"a1b2c3","kind":"agent","running":true,"age":12,"desc":"Star app: Agent Manager"},{"id":"bx9","kind":"shell","running":false,"age":3600,"desc":"15:38:10 push started"}]},{"name":"MAC_SES8_08-NOV (GitHub)","status":"idle","folder":"~/Developer/claude-code","last":"","tasks_running":0,"tasks_total":0,"tasks":[]}],"other":[]},
 "vm":{"ok":true,"claude":true,"vm_agent":true,"services":[{"name":"agent","active":"active"},{"name":"claude-code","active":"active"},{"name":"worker-gemini","active":"failed"}],"workers":[{"name":"gemini","age":210,"last":"2026-11-08 22:03:43 UTC round done; again in 15 min"}]},
 "phones":{"ok":true,"devices":[{"model":"Pixel 7","via":"usb+network","claude_code":false,"claude_app":true}]},
 "cloud":{"ok":true,"note":"sample","items":[{"name":"session_01Example","age":300,"first":"a message"}]}}
