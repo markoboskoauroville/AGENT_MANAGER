@@ -329,6 +329,28 @@ def merge_sessions(res):
     return {"source": f.get("source") or "no master list yet", "updated": asof, "rows": out, "totals": tot}
 
 
+def slugify(n):
+    return re.sub(r"[^a-z0-9]+", "-", (n or "").lower()).strip("-")
+
+
+def retire():
+    """~/.mantra-os/retire/<session-slug>.json written by the master (state checking|clean|blocked|retired, checks[]), plus the retire
+    commands waiting in the queue (state sent|done|failed), keyed by session slug."""
+    out = {"files": {}, "queued": {}, "master_slug": ""}
+    for f in glob.glob(HOME + "/.mantra-os/retire/*.json"):
+        j = jread(f)
+        if j:
+            out["files"][os.path.basename(f)[:-5]] = j
+    for c in sorted(glob.glob(HOME + "/.mantra-os/commands/*/*.json"), key=os.path.getmtime):
+        j = jread(c)
+        if j.get("action") == "retire":
+            out["queued"][slugify(j.get("session"))] = {"state": j.get("state"), "result": j.get("result")}
+    pl = sorted(glob.glob(HOME + "/.mantra-os/plans/*.json"), key=os.path.getmtime, reverse=True)
+    if pl:
+        out["master_slug"] = os.path.basename(pl[0])[:-5]
+    return out
+
+
 def cloud():
     out = {"name": "Cloud sessions", "ok": True, "items": [],
            "note": "from the hub's INBOX (messages they pushed); a live list of cloud sessions has no cheap source yet"}
@@ -359,6 +381,7 @@ def main():
                 res[k] = {"name": k, "ok": False, "note": "collector failed: " + type(e).__name__}
     ts.pop("ips", None)
     res["tailnet"] = ts
+    res["retire"] = retire()
     res["sessions_all"] = merge_sessions(res)
     res["time"] = time.strftime("%H:%M:%S")
     if "--text" in sys.argv:

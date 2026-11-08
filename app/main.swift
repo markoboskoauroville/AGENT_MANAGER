@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 4
+let VERSION = 5
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -57,6 +57,24 @@ final class Model: ObservableObject {
     @Published var openNote = ""
     /// the solo filter: "" = everything; done|running|paused|failed|todo = only tasks with that status; sessions; vm
     @Published var solo = ""
+    @Published var confirmAll = false
+    @Published var retireOpen: Set<String> = []
+    static func slug(_ n: String) -> String {
+        var out = "", dash = false
+        for ch in n.lowercased() { if ch.isLetter && ch.isASCII || ch.isNumber && ch.isASCII { out.append(ch); dash = false } else if !dash { out.append("-"); dash = true } }
+        return out.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+    /// RETIRE never deletes: it queues {action:"retire"} for the Session Manager, which wakes the session, has it check everything and only then retires it
+    func retire(_ name: String, device: String, kind: String) {
+        let master = ((data["retire"] as? J)?["master_slug"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "master"
+        let dir = NSString(string: "~/.mantra-os/commands/\(master)").expandingTildeInPath
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let ms = Int(Date().timeIntervalSince1970 * 1000) + Int.random(in: 0..<999)
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
+        let j: J = ["id": "\(ms)", "agent": "", "task": 0, "action": "retire", "session": name, "device": device, "kind": kind, "text": "", "at": f.string(from: Date()), "state": "sent", "result": ""]
+        if let d = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted]) { try? d.write(to: URL(fileURLWithPath: "\(dir)/\(ms).json"), options: .atomic) }
+        refresh()
+    }
     func toggleSolo(_ k: String) { solo = solo == k ? "" : k }
     /// OPEN MANTRA OPERATING SYSTEM: a new iTerm window, Claude Code as the master session with master-prompt.txt as its first prompt
     func openMaster() {
@@ -408,12 +426,30 @@ func stateColor(_ st: String) -> Color {
 }
 
 struct SessionsPanel: View {
+    @ObservedObject var m: Model
     let all: J; let net: J
     static func deviceOrder(_ rows: [J]) -> [String] {
         var names = Set<String>()
         for r in rows { if let d = r["device"] as? String { names.insert(d) } }
         func w(_ x: String) -> Int { x == "Mac" ? 0 : (x == "chromium-vm" ? 1 : (x == "cloud" ? 9 : 5)) }
         return names.sorted { (w($0), $0) < (w($1), $1) }
+    }
+    /// (label, colour) of a session's retire progress: from the master's retire file, else from the queued command
+    static func retireState(_ rt: J, _ name: String) -> (String, Color)? {
+        let sl = Model.slug(name)
+        if let f = (rt["files"] as? J)?[sl] as? J, let st = f["state"] as? String {
+            switch st {
+            case "retired": return ("RETIRED", Ink.grey)
+            case "clean": return ("CLEAN", Ink.green)
+            case "blocked": return ("BLOCKED", Ink.red)
+            default: return ("CHECKING", Ink.amber)
+            }
+        }
+        if let q = (rt["queued"] as? J)?[sl] as? J {
+            let st = q["state"] as? String ?? "sent"
+            return st == "failed" ? ("RETIRE FAILED", Ink.red) : (st == "done" ? ("RETIRING", Ink.amber) : ("RETIRING", Ink.amber))
+        }
+        return nil
     }
     static func deviceChips(_ devs: [J]) -> [Chip] {
         var out: [Chip] = []
@@ -441,6 +477,7 @@ struct SessionsPanel: View {
     var body: some View {
         let rows = (all["rows"] as? [J]) ?? []
         let devs = (net["devices"] as? [J]) ?? []
+        let m0 = m.data
         let tot = (all["totals"] as? [String: [String: Int]]) ?? [:]
         let order = SessionsPanel.deviceOrder(rows)
         let busy = rows.filter { ($0["state"] as? String) == "busy" || ($0["state"] as? String) == "running" }.count
@@ -453,6 +490,25 @@ struct SessionsPanel: View {
             Rectangle().fill(Ink.line).frame(height: 1)
             mono("TOTALS BY DEVICE", Ink.grey, 10.5)
             chips(SessionsPanel.totalChips(order, tot))
+            let offRows = rows.filter { ($0["state"] as? String) == "offline" && SessionsPanel.retireState((m0["retire"] as? J) ?? [:], $0["name"] as? String ?? "") == nil }
+            HStack(spacing: 8) {
+                WordButton(word: "RETIRE ALL OFFLINE (\(offRows.count))", id: "retire-all-offline", color: Ink.amber) { if !offRows.isEmpty { m.confirmAll = true } }
+                mono("never deletes: each session is woken, checked, then retired", Ink.grey, 10.5)
+            }
+            if m.confirmAll {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("RETIRE THESE \(offRows.count) SESSIONS?").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.amber)
+                    ForEach(Array(offRows.enumerated()), id: \.offset) { _, r in mono("· " + (r["name"] as? String ?? "") + "  (" + (r["device"] as? String ?? "") + ")", Ink.text, 11) }
+                    mono("The Session Manager wakes each one, it checks that everything is saved and pushed, and only then it is retired. A device that is off is BLOCKED.", Ink.dim, 10.5)
+                    HStack(spacing: 8) {
+                        WordButton(word: "CONFIRM", id: "retire-confirm", color: Ink.green) {
+                            for r in offRows { m.retire(r["name"] as? String ?? "", device: r["device"] as? String ?? "", kind: r["kind"] as? String ?? "") }
+                            m.confirmAll = false }
+                        WordButton(word: "CANCEL", id: "retire-cancel") { m.confirmAll = false }
+                    }
+                }.padding(10).background(RoundedRectangle(cornerRadius: 8).fill(Ink.amber.opacity(0.08)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.amber.opacity(0.5), lineWidth: 1))
+            }
             ForEach(order, id: \.self) { dv in
                 Rectangle().fill(Ink.line).frame(height: 1)
                 mono(dv.uppercased(), Ink.grey, 10.5)
@@ -465,6 +521,27 @@ struct SessionsPanel: View {
                             Text(stt.uppercased()).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(stateColor(stt))
                             Spacer(minLength: 4)
                             mono((r["kind"] as? String ?? "") + " · " + (r["source"] as? String ?? "") + " " + (((r["as_of"] as? String) ?? "").suffix(8).prefix(8)), Ink.grey, 10)
+                        }
+                        let nm = r["name"] as? String ?? ""
+                        let rs = SessionsPanel.retireState((m0["retire"] as? J) ?? [:], nm)
+                        HStack(spacing: 8) {
+                            if let rs = rs {
+                                Text(rs.0).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(rs.1)
+                                    .onTapGesture { if m.retireOpen.contains(nm) { m.retireOpen.remove(nm) } else { m.retireOpen.insert(nm) } }
+                                    .axButton("Retire checks " + nm, id: "retire-checks-" + Model.slug(nm)) { if m.retireOpen.contains(nm) { m.retireOpen.remove(nm) } else { m.retireOpen.insert(nm) } }
+                            }
+                            if rs == nil || rs?.0 == "BLOCKED" || rs?.0 == "RETIRE FAILED" {
+                                WordButton(word: "RETIRE", id: "retire-" + Model.slug(nm), color: Ink.amber) { m.retire(nm, device: dv, kind: r["kind"] as? String ?? "") }
+                            }
+                        }.padding(.leading, 16)
+                        if let f = (((m0["retire"] as? J)?["files"] as? J)?[Model.slug(nm)]) as? J, rs != nil, (m.retireOpen.contains(nm) || rs?.0 == "BLOCKED") {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(Array(((f["checks"] as? [J]) ?? []).enumerated()), id: \.offset) { _, c in
+                                    let ok = (c["ok"] as? Bool) ?? false
+                                    mono((ok ? "✓ " : "✕ ") + (c["name"] as? String ?? "") + ((c["detail"] as? String ?? "").isEmpty ? "" : ": " + (c["detail"] as? String ?? "")), ok ? Ink.green : Ink.red, 10.5)
+                                }
+                                if ((f["checks"] as? [J]) ?? []).isEmpty { mono("waiting for the Session Manager to wake this session", Ink.grey, 10.5) }
+                            }.padding(.leading, 16)
                         }
                         if let m = r["modes"] as? J {
                             chips([Chip(label: "MODEL", value: m["model"] as? String), Chip(label: "PERMISSION", value: (m["permission"] as? String).map { $0 == "normal" ? "default" : $0 }),
@@ -655,7 +732,7 @@ struct Root: View {
                             mono("No plan yet. The master session writes ~/.mantra-os/plans/<slug>.json (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a).", Ink.grey, 11)
                         }
                         if m.solo.isEmpty { HeaderStrip(st: (((m.data["mac"] as? J)?["settings"]) as? J) ?? [:]) }
-                        if m.solo.isEmpty || m.solo == "sessions" { SessionsPanel(all: (m.data["sessions_all"] as? J) ?? [:], net: (m.data["tailnet"] as? J) ?? [:]) }
+                        if m.solo.isEmpty || m.solo == "sessions" { SessionsPanel(m: m, all: (m.data["sessions_all"] as? J) ?? [:], net: (m.data["tailnet"] as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "sessions" { MacPanel(d: (m.data["mac"] as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "vm" { VMPanel(d: (m.data["vm"] as? J) ?? [:]) }
                         if m.solo.isEmpty { PhonesPanel(d: (m.data["phones"] as? J) ?? [:])
