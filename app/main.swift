@@ -54,6 +54,25 @@ final class Model: ObservableObject {
     @Published var stamp = "never"
     @Published var busy = false
     @Published var note = ""
+    @Published var openNote = ""
+    /// OPEN MANTRA OPERATING SYSTEM: a new iTerm window, Claude Code as the master session with master-prompt.txt as its first prompt
+    func openMaster() {
+        let fm = FileManager.default
+        let prompt = Bundle.main.url(forResource: "master-prompt", withExtension: "txt")?.path
+            ?? NSString(string: "~/Developer/AGENT_MANAGER/master-prompt.txt").expandingTildeInPath
+        let dir = NSString(string: "~/.mantra-os").expandingTildeInPath
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let sh = dir + "/start-master.sh"
+        let body = "#!/bin/zsh -l\ncd ~/Developer/claude-code\nexec claude \"$(cat '\(prompt)')\"\n"
+        try? body.write(toFile: sh, atomically: true, encoding: .utf8)
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sh)
+        let script = "tell application \"iTerm\"\nactivate\ncreate window with default profile command \"\(sh)\"\nend tell"
+        DispatchQueue.global().async {
+            var err: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&err)
+            DispatchQueue.main.async { self.openNote = err == nil ? "master session opened in iTerm" : "iTerm did not open: " + ((err?["NSAppleScriptErrorMessage"] as? String) ?? "no answer") }
+        }
+    }
     @Published var open: Set<String> = []          // task rows whose report is expanded: "<slug>#<n>"
     @Published var drafts: [String: String] = [:]  // the prompt box of each task
     /// writes one command into the queue the master session reads: ~/.mantra-os/commands/<slug>/<unix-ms>.json
@@ -228,6 +247,18 @@ struct Bar: View {
 struct TaskRow: View {
     @ObservedObject var m: Model
     let slug: String; let t: J; let cmds: [J]
+    @ViewBuilder func replyRow(n: Int, key: String, agent: String) -> some View {
+        HStack(spacing: 6) {
+                        TextField("message to this worker", text: Binding(get: { m.drafts[key] ?? "" }, set: { m.drafts[key] = $0 }))
+                            .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text)
+                            .padding(6).background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+                            .accessibilityIdentifier("box\(n)")
+                        WordButton(word: "SEND", id: "send\(n)", color: Ink.green) {
+                            let x = (m.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if !x.isEmpty { m.send(slug: slug, agent: agent, task: n, action: "message", text: x) } }
+                        WordButton(word: "REPROMPT", id: "reprompt\(n)", color: Ink.amber) {
+                            let x = (m.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if !x.isEmpty { m.send(slug: slug, agent: agent, task: n, action: "reprompt", text: x) } }
+                    }
+    }
     var body: some View {
         let n = t["n"] as? Int ?? 0, key = "\(slug)#\(n)"
         let st = t["status"] as? String ?? "todo", checked = (t["checked"] as? Bool) ?? false
@@ -248,27 +279,27 @@ struct TaskRow: View {
             .axButton("Task \(n) report", id: "task\(n)") { if isOpen { m.open.remove(key) } else { m.open.insert(key) } }
             HStack(spacing: 8) {
                 Spacer().frame(width: 50)
-                mono("agent " + (agent.isEmpty ? "unknown" : agent), Ink.dim, 10.5).lineLimit(1)
+                mono("worker " + (agent.isEmpty ? "unknown" : agent), Ink.dim, 10.5).lineLimit(1)
                 Spacer(minLength: 4)
                 if st == "running" || st == "paused" {
                     WordButton(word: "PAUSE", id: "pause\(n)") { m.send(slug: slug, agent: agent, task: n, action: "pause") }
                     WordButton(word: "STOP", id: "stop\(n)", color: Ink.red) { m.send(slug: slug, agent: agent, task: n, action: "stop") }
                 }
             }
-            if isOpen {
+            if st == "paused" {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("WAITING FOR YOU").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.amber)
+                    mono(!next.isEmpty ? next : (!report.isEmpty ? report : "this agent is paused and has not said what it needs"), Ink.text, 12)
+                    replyRow(n: n, key: key, agent: agent)
+                }
+                .padding(10).background(RoundedRectangle(cornerRadius: 8).fill(Ink.amber.opacity(0.10)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.amber.opacity(0.6), lineWidth: 1)).padding(.leading, 50)
+            }
+            if isOpen && st != "paused" {
                 VStack(alignment: .leading, spacing: 6) {
                     mono(report.isEmpty ? "no report yet" : report, report.isEmpty ? Ink.grey : Ink.text, 11.5)
                     if !next.isEmpty { mono("next: " + next, Ink.dim, 11) }
-                    HStack(spacing: 6) {
-                        TextField("message to this agent", text: Binding(get: { m.drafts[key] ?? "" }, set: { m.drafts[key] = $0 }))
-                            .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text)
-                            .padding(6).background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
-                            .accessibilityIdentifier("box\(n)")
-                        WordButton(word: "SEND", id: "send\(n)", color: Ink.green) {
-                            let x = (m.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if !x.isEmpty { m.send(slug: slug, agent: agent, task: n, action: "message", text: x) } }
-                        WordButton(word: "REPROMPT", id: "reprompt\(n)", color: Ink.amber) {
-                            let x = (m.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if !x.isEmpty { m.send(slug: slug, agent: agent, task: n, action: "reprompt", text: x) } }
-                    }
+                    replyRow(n: n, key: key, agent: agent)
                     ForEach(Array(cmds.filter { ($0["task"] as? Int) == n }.prefix(3).enumerated()), id: \.offset) { _, c in
                         let cs = c["state"] as? String ?? "sent"
                         mono("\((c["action"] as? String) ?? ""): \(cs)" + (((c["result"] as? String) ?? "").isEmpty ? "" : " · " + (c["result"] as? String ?? "")),
@@ -294,8 +325,12 @@ struct PlanCard: View {
         let nowT = tasks.filter { st($0) == "running" || st($0) == "paused" }.map { "\($0["n"] as? Int ?? 0)" }
         let nextT = tasks.filter { st($0) == "todo" }.prefix(3).map { "\($0["n"] as? Int ?? 0)" }
         let doneT = tasks.filter { st($0) == "done" }.map { "\($0["n"] as? Int ?? 0)" }
-        Panel(title: p["project"] as? String ?? slug, state: "\(done) of \(tasks.count) done · updated \(ago(p["age"] as? Int ?? 0)) ago", good: done == tasks.count && !tasks.isEmpty ? true : nil) {
+        Panel(title: "Session Manager · " + (p["session"] as? String ?? p["project"] as? String ?? slug), state: "\(done) of \(tasks.count) done · updated \(ago(p["age"] as? Int ?? 0)) ago", good: done == tasks.count && !tasks.isEmpty ? true : nil) {
+            if let pr = p["project"] as? String, !pr.isEmpty { mono(pr, Ink.text, 12.5) }
             if let goal = p["goal"] as? String, !goal.isEmpty { mono(goal, Ink.dim, 12) }
+            if let f = tasks.first(where: { ($0["focus"] as? Bool) == true }) {
+                mono("DOING NOW  \(f["n"] as? Int ?? 0). " + (f["title"] as? String ?? ""), Ink.amber, 12)
+            }
             Bar(done: done, running: run, total: tasks.count).padding(.vertical, 2)
             VStack(alignment: .leading, spacing: 2) {
                 mono("WHERE WE ARE  " + (nowT.isEmpty ? "nothing running" : "working on " + nowT.joined(separator: ", ")), Ink.amber, 11)
@@ -310,7 +345,7 @@ struct PlanCard: View {
                 TaskRow(m: m, slug: slug, t: f, cmds: cmds).padding(10)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Ink.amber.opacity(0.08)))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.amber.opacity(0.5), lineWidth: 1))
-                Text("BACKGROUND").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey).padding(.top, 4)
+                Text("WORKERS IN THE BACKGROUND").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey).padding(.top, 4)
             }
             ForEach(Array(rest.enumerated()), id: \.offset) { i, t in
                 TaskRow(m: m, slug: slug, t: t, cmds: cmds)
@@ -499,6 +534,14 @@ struct Root: View {
                             Spacer()
                             Text("REFRESH").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(m.busy ? Ink.green : Ink.grey)
                                 .contentShape(Rectangle()).onTapGesture { m.refresh() }.axButton("Refresh", id: "refresh") { m.refresh() }
+                        }
+                        HStack(spacing: 10) {
+                            Text("OPEN MANTRA OPERATING SYSTEM").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Ink.ground)
+                                .padding(.horizontal, 14).padding(.vertical, 8).background(RoundedRectangle(cornerRadius: 8).fill(Ink.green))
+                                .contentShape(Rectangle()).onTapGesture { m.openMaster() }
+                                .axButton("Open Mantra Operating System", id: "openos") { m.openMaster() }
+                            if !m.openNote.isEmpty { mono(m.openNote, Ink.dim, 11) }
+                            Spacer(minLength: 0)
                         }
                         TotalsStrip(plans: (m.data["plans"] as? [J]) ?? [], d: m.data)
                         ForEach(Array(((m.data["plans"] as? [J]) ?? []).enumerated()), id: \.offset) { _, p in PlanCard(m: m, p: p) }
