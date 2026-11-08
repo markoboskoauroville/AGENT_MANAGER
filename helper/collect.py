@@ -305,7 +305,7 @@ def merge_sessions(res):
     asof = f.get("updated") or ""
     for r in f.get("sessions") or []:
         rows[r.get("name")] = {"name": r.get("name"), "kind": r.get("kind"), "state": r.get("state"), "device": r.get("device") or "unknown",
-                               "source": "master list", "as_of": asof}
+                               "source": "master list", "as_of": asof[11:19]}
     now = time.strftime("%H:%M:%S")
     for s in res["mac"].get("sessions", []):
         old = rows.get(s["name"]) or next((v for v in rows.values() if v["device"] == "Mac" and v["name"].split(" (")[0] == (s["name"] or "").split(" (")[0]), None)
