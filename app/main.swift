@@ -409,29 +409,50 @@ func stateColor(_ st: String) -> Color {
 
 struct SessionsPanel: View {
     let all: J; let net: J
+    static func deviceOrder(_ rows: [J]) -> [String] {
+        var names = Set<String>()
+        for r in rows { if let d = r["device"] as? String { names.insert(d) } }
+        func w(_ x: String) -> Int { x == "Mac" ? 0 : (x == "chromium-vm" ? 1 : (x == "cloud" ? 9 : 5)) }
+        return names.sorted { (w($0), $0) < (w($1), $1) }
+    }
+    static func deviceChips(_ devs: [J]) -> [Chip] {
+        var out: [Chip] = []
+        for d in devs {
+            let on = (d["online"] as? Bool) ?? false
+            let name = d["name"] as? String ?? "?"
+            let os = d["os"] as? String ?? ""
+            let seen = String((d["last_seen"] as? String ?? "").prefix(10))
+            var v = os + " online"
+            if !on { v = os + " offline" + (seen.isEmpty ? "" : " since " + seen) }
+            out.append(Chip(label: (on ? "● " : "○ ") + name, value: v, color: on ? Ink.green : Ink.red))
+        }
+        return out
+    }
+    static func totalChips(_ order: [String], _ tot: [String: [String: Int]]) -> [Chip] {
+        var out: [Chip] = []
+        for dv in order {
+            let t = tot[dv] ?? [:]
+            var parts: [String] = []
+            for k in ["busy", "running", "idle", "pending", "waiting", "offline"] { if let n = t[k] { parts.append("\(n) \(k)") } }
+            out.append(Chip(label: dv, value: parts.joined(separator: " · ")))
+        }
+        return out
+    }
     var body: some View {
         let rows = (all["rows"] as? [J]) ?? []
         let devs = (net["devices"] as? [J]) ?? []
         let tot = (all["totals"] as? [String: [String: Int]]) ?? [:]
-        let order = Array(Set(rows.compactMap { $0["device"] as? String })).sorted { a, b in
-            let w: (String) -> Int = { $0 == "Mac" ? 0 : $0 == "chromium-vm" ? 1 : $0 == "cloud" ? 9 : 5 }
-            return (w(a), a) < (w(b), b) }
+        let order = SessionsPanel.deviceOrder(rows)
         let busy = rows.filter { ($0["state"] as? String) == "busy" || ($0["state"] as? String) == "running" }.count
         let off = rows.filter { ($0["state"] as? String) == "offline" }.count
         Panel(title: "Sessions on every machine", state: "\(rows.count) sessions · \(busy) working · \(off) offline", good: nil) {
             // devices on the tailnet
             mono("DEVICES  (Tailscale)", Ink.grey, 10.5)
-            chips(devs.map { d in
-                let on = (d["online"] as? Bool) ?? false
-                return Chip(label: (on ? "● " : "○ ") + (d["name"] as? String ?? "?"),
-                            value: ((d["os"] as? String) ?? "") + (on ? " online" : " offline" + (((d["last_seen"] as? String) ?? "").isEmpty ? "" : " since " + String(((d["last_seen"] as? String) ?? "").prefix(10))),
-                            color: on ? Ink.green : Ink.red) })
+            chips(SessionsPanel.deviceChips(devs))
             if devs.isEmpty { mono("Tailscale did not answer", Ink.amber, 11) }
             Rectangle().fill(Ink.line).frame(height: 1)
             mono("TOTALS BY DEVICE", Ink.grey, 10.5)
-            chips(order.map { dv in
-                let t = tot[dv] ?? [:]
-                return Chip(label: dv, value: ["busy", "running", "idle", "pending", "waiting", "offline"].compactMap { k in t[k].map { "\($0) \(k)" } }.joined(separator: " · "), color: Ink.text) })
+            chips(SessionsPanel.totalChips(order, tot))
             ForEach(order, id: \.self) { dv in
                 Rectangle().fill(Ink.line).frame(height: 1)
                 mono(dv.uppercased(), Ink.grey, 10.5)
