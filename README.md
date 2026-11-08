@@ -1,4 +1,4 @@
-# Agent Manager (Mantra)
+# Agent Manager (CEO) (Mantra)
 
 A Mac app (Swift, in the star, group Claude): one window with a table per machine, refreshed every 5 seconds, read-only first.
 

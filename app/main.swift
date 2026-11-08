@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 2
+let VERSION = 3
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -55,6 +55,9 @@ final class Model: ObservableObject {
     @Published var busy = false
     @Published var note = ""
     @Published var openNote = ""
+    /// the solo filter: "" = everything; done|running|paused|failed|todo = only tasks with that status; sessions; vm
+    @Published var solo = ""
+    func toggleSolo(_ k: String) { solo = solo == k ? "" : k }
     /// OPEN MANTRA OPERATING SYSTEM: a new iTerm window, Claude Code as the master session with master-prompt.txt as its first prompt
     func openMaster() {
         let fm = FileManager.default
@@ -319,7 +322,9 @@ struct PlanCard: View {
     @ObservedObject var m: Model
     let p: J
     var body: some View {
-        let tasks = (p["tasks"] as? [J]) ?? []
+        let allTasks = (p["tasks"] as? [J]) ?? []
+        let tasks = allTasks
+        let shown = ["done", "running", "paused", "failed", "todo"].contains(m.solo) ? allTasks.filter { st($0) == m.solo } : allTasks
         let slug = p["slug"] as? String ?? ""
         let done = tasks.filter { st($0) == "done" }.count, run = tasks.filter { st($0) == "running" }.count
         let nowT = tasks.filter { st($0) == "running" || st($0) == "paused" }.map { "\($0["n"] as? Int ?? 0)" }
@@ -338,8 +343,9 @@ struct PlanCard: View {
                 mono("NEXT  " + (nextT.isEmpty ? "nothing waiting" : nextT.joined(separator: ", ")), Ink.dim, 11)
             }.padding(.bottom, 4)
             let cmds = (p["commands"] as? [J]) ?? []
-            let focus = tasks.first { ($0["focus"] as? Bool) == true }
-            let rest = tasks.filter { ($0["focus"] as? Bool) != true }
+            let focus = shown.first { ($0["focus"] as? Bool) == true }
+            let rest = shown.filter { ($0["focus"] as? Bool) != true }
+            if shown.isEmpty { mono("no task with this status", Ink.grey, 11) }
             if let f = focus {
                 Text("IN FOCUS").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.amber)
                 TaskRow(m: m, slug: slug, t: f, cmds: cmds).padding(10)
@@ -356,25 +362,41 @@ struct PlanCard: View {
 }
 
 struct TotalsStrip: View {
+    @ObservedObject var m: Model
     let plans: [J]; let d: J
     var body: some View {
         let all = plans.flatMap { ($0["tasks"] as? [J]) ?? [] }
         let sess = ((d["mac"] as? J)?["sessions"] as? [J])?.count ?? 0
         let vmUp = ((d["vm"] as? J)?["ok"] as? Bool) ?? false
-        HStack(spacing: 0) {
-            ForEach(Array([("DONE", cnt(all, "done"), Ink.green), ("RUNNING", cnt(all, "running"), Ink.amber), ("PAUSED", cnt(all, "paused"), Ink.dim),
-                           ("FAILED", cnt(all, "failed"), Ink.red), ("TO DO", cnt(all, "todo"), Ink.grey), ("SESSIONS", sess, Ink.text)].enumerated()), id: \.offset) { _, x in
-                VStack(spacing: 2) {
-                    Text("\(x.1)").font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(x.2)
-                    Text(x.0).font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey)
-                }.frame(maxWidth: .infinity)
+        let tiles: [(String, String, String, Color)] = [
+            ("done", "\(cnt(all, "done"))", "DONE", Ink.green), ("running", "\(cnt(all, "running"))", "RUNNING", Ink.amber),
+            ("paused", "\(cnt(all, "paused"))", "PAUSED", Ink.dim), ("failed", "\(cnt(all, "failed"))", "FAILED", Ink.red),
+            ("todo", "\(cnt(all, "todo"))", "TO DO", Ink.grey), ("sessions", "\(sess)", "SESSIONS", Ink.text),
+            ("vm", vmUp ? "UP" : "DOWN", "VM", vmUp ? Ink.green : Ink.red)]
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(Array(tiles.enumerated()), id: \.offset) { _, x in
+                    let on = m.solo == x.0
+                    VStack(spacing: 2) {
+                        Text(x.1).font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(x.3)
+                        Text(x.2).font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(on ? Ink.text : Ink.grey)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(on ? x.3.opacity(0.18) : Color.clear))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? x.3 : Color.clear, lineWidth: 1.5))
+                    .contentShape(Rectangle()).onTapGesture { m.toggleSolo(x.0) }
+                    .axButton("Solo " + x.2, id: "solo-" + x.0, value: on ? "on" : "off") { m.toggleSolo(x.0) }
+                }
             }
-            VStack(spacing: 2) {
-                Text(vmUp ? "UP" : "DOWN").font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(vmUp ? Ink.green : Ink.red)
-                Text("VM").font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey)
-            }.frame(maxWidth: .infinity)
+            if !m.solo.isEmpty {
+                HStack(spacing: 8) {
+                    mono("SOLO: only " + (tiles.first { $0.0 == m.solo }?.2 ?? m.solo), Ink.amber, 11)
+                    WordButton(word: "SHOW ALL", id: "solo-clear", color: Ink.amber) { m.solo = "" }
+                    Spacer(minLength: 0)
+                }.padding(.horizontal, 6)
+            }
         }
-        .padding(.vertical, 12)
+        .padding(6)
         .background(RoundedRectangle(cornerRadius: 12).fill(Ink.panel))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Ink.line, lineWidth: 1))
     }
@@ -497,7 +519,7 @@ struct TopRow: View {
     @AppStorage("onTop") private var onTop = false
     var body: some View {
         ZStack {
-            (Text("Agent Manager").fontWeight(.bold) + Text(" (Mantra)").fontWeight(.regular)).font(.system(size: 15)).foregroundStyle(Ink.text)
+            (Text("Agent Manager").fontWeight(.bold) + Text(" (CEO) (Mantra)").fontWeight(.regular)).font(.system(size: 15)).foregroundStyle(Ink.text)
             HStack(spacing: 10) {
                 Spacer().frame(width: 64)
                 Text("ON").foregroundStyle(Ink.green)
@@ -522,6 +544,11 @@ struct TopRow: View {
 struct Root: View {
     @ObservedObject var m: Model
     let margin: CGFloat = 16
+    static func showPlan(_ solo: String, _ p: J) -> Bool {
+        if solo == "sessions" || solo == "vm" { return false }
+        if ["done", "running", "paused", "failed", "todo"].contains(solo) { return (((p["tasks"] as? [J]) ?? []).contains { st($0) == solo }) }
+        return true
+    }
     var body: some View {
         VStack(spacing: 0) {
             TopRow().padding(.horizontal, 12).padding(.top, 6)
@@ -543,17 +570,19 @@ struct Root: View {
                             if !m.openNote.isEmpty { mono(m.openNote, Ink.dim, 11) }
                             Spacer(minLength: 0)
                         }
-                        TotalsStrip(plans: (m.data["plans"] as? [J]) ?? [], d: m.data)
-                        ForEach(Array(((m.data["plans"] as? [J]) ?? []).enumerated()), id: \.offset) { _, p in PlanCard(m: m, p: p) }
+                        TotalsStrip(m: m, plans: (m.data["plans"] as? [J]) ?? [], d: m.data)
+                        ForEach(Array(((m.data["plans"] as? [J]) ?? []).enumerated()), id: \.offset) { _, p in
+                            if Root.showPlan(m.solo, p) { PlanCard(m: m, p: p) }
+                        }
                         if ((m.data["plans"] as? [J]) ?? []).isEmpty && !m.data.isEmpty {
                             mono("No plan yet. The master session writes ~/.mantra-os/plans/<slug>.json (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a).", Ink.grey, 11)
                         }
-                        HeaderStrip(st: (((m.data["mac"] as? J)?["settings"]) as? J) ?? [:])
-                        MacPanel(d: (m.data["mac"] as? J) ?? [:])
-                        VMPanel(d: (m.data["vm"] as? J) ?? [:])
-                        PhonesPanel(d: (m.data["phones"] as? J) ?? [:])
-                        CloudPanel(d: (m.data["cloud"] as? J) ?? [:])
-                        mono("Read-only. Actions (stop an agent, open a session) come later. `AgentManager --json` prints this for other sessions.", Ink.grey, 11)
+                        if m.solo.isEmpty { HeaderStrip(st: (((m.data["mac"] as? J)?["settings"]) as? J) ?? [:]) }
+                        if m.solo.isEmpty || m.solo == "sessions" { MacPanel(d: (m.data["mac"] as? J) ?? [:]) }
+                        if m.solo.isEmpty || m.solo == "vm" { VMPanel(d: (m.data["vm"] as? J) ?? [:]) }
+                        if m.solo.isEmpty { PhonesPanel(d: (m.data["phones"] as? J) ?? [:])
+                        CloudPanel(d: (m.data["cloud"] as? J) ?? [:]) }
+                        mono("Commands go to the Session Manager through ~/.mantra-os/commands. `AgentManager --json` prints this overview for other sessions.", Ink.grey, 11)
                     }
                     .frame(width: max(0, g.size.width - 2 * margin), alignment: .leading)
                     .padding(margin)
@@ -588,9 +617,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
         if let i = args.firstIndex(where: { $0 == "--shot" || $0 == "--shot-live" }), i + 1 < args.count {
             if args[i] == "--shot-live" { model.data = (collect().flatMap { try? JSONSerialization.jsonObject(with: $0) as? J }) ?? [:] }
             else { model.data = try! JSONSerialization.jsonObject(with: Data(sampleJSON.utf8)) as! J }
+            if let mac = model.data["mac"] as? J, let pl = mac["plans"] { model.data["plans"] = pl }   // the sample keeps its plan inside "mac"
             model.stamp = (model.data["time"] as? String) ?? "?"
-            window.setFrame(NSRect(x: -4000, y: -4000, width: 620, height: 900), display: false)
-            host.frame = NSRect(x: 0, y: 0, width: 620, height: 900); host.layoutSubtreeIfNeeded()
+            if let k = args.firstIndex(of: "--solo"), k + 1 < args.count { model.solo = args[k + 1] }
+            var width: CGFloat = 620
+            if let k = args.firstIndex(of: "--width"), k + 1 < args.count, let w = Double(args[k + 1]) { width = CGFloat(w) }
+            window.setFrame(NSRect(x: -4000, y: -4000, width: width, height: 900), display: false)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 900); host.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.6))
             if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
                 host.cacheDisplay(in: host.bounds, to: rep)
