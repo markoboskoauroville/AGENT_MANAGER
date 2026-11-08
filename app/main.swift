@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 7
+let VERSION = 8
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -58,6 +58,19 @@ final class Model: ObservableObject {
     /// the solo filter: "" = everything; done|running|paused|failed|todo = only tasks with that status; sessions; vm
     @Published var solo = ""
     @Published var confirmAll = false
+    @Published var renameOpen: Set<String> = []
+    @Published var renameDraft: [String: String] = [:]
+    /// the CEO's label helper (bundled): `set <sid> <text>` = manual label, `auto <sid>` = the CEO's own again
+    func labelCmd(_ args: [String]) {
+        let h = Bundle.main.url(forResource: "ceo_labels", withExtension: "py")?.path
+            ?? NSString(string: "~/Developer/AGENT_MANAGER/helper/ceo_labels.py").expandingTildeInPath
+        DispatchQueue.global().async {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); p.arguments = ["-I", h] + args
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            try? p.run(); p.waitUntilExit()
+            DispatchQueue.main.async { self.refresh() }
+        }
+    }
     @Published var retireOpen: Set<String> = []
     static func slug(_ n: String) -> String {
         var out = "", dash = false
@@ -462,6 +475,32 @@ struct SessionsPanel: View {
                 .help("Model of the current task: " + (md?["current_source"] as? String ?? "unknown source"))
         } else { t }
     }
+    /// the label is the CEO's: "BASE (Label)", marked CEO-given, with a RENAME field to override by hand
+    @ViewBuilder static func labelRow(_ m: Model, _ r: J, _ sid: String) -> some View {
+        let lb = r["label"] as? J
+        let text = lb?["label"] as? String
+        let by = lb?["by"] as? String ?? "ceo"
+        let applied = (r["name"] as? String ?? "").contains("(" + (text ?? "\u{0}") + ")")
+        HStack(spacing: 8) {
+            mono((by == "manual" ? "LABEL by Marko: " : "LABEL by CEO: ") + (text ?? "not computed yet") + (text != nil && !applied ? "  (the title takes it at the next prompt)" : ""),
+                 by == "manual" ? Ink.green : Ink.dim, 10.5)
+            WordButton(word: "RENAME", id: "rename-" + sid.prefix(8), color: Ink.grey) {
+                if m.renameOpen.contains(sid) { m.renameOpen.remove(sid) } else { m.renameOpen.insert(sid); m.renameDraft[sid] = text ?? "" } }
+            Spacer(minLength: 0)
+        }.padding(.leading, 16)
+        if m.renameOpen.contains(sid) {
+            HStack(spacing: 6) {
+                TextField("label, 1 to 3 words", text: Binding(get: { m.renameDraft[sid] ?? "" }, set: { m.renameDraft[sid] = $0 }))
+                    .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text)
+                    .padding(6).background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+                    .accessibilityIdentifier("rename-box-" + sid.prefix(8))
+                WordButton(word: "SET", id: "rename-set-" + sid.prefix(8), color: Ink.green) {
+                    let x = (m.renameDraft[sid] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !x.isEmpty { m.labelCmd(["set", sid, x]); m.renameOpen.remove(sid) } }
+                WordButton(word: "AUTO", id: "rename-auto-" + sid.prefix(8), color: Ink.amber) { m.labelCmd(["auto", sid]); m.renameOpen.remove(sid) }
+            }.padding(.leading, 16)
+        }
+    }
     static func deviceChips(_ devs: [J]) -> [Chip] {
         var out: [Chip] = []
         for d in devs {
@@ -554,6 +593,9 @@ struct SessionsPanel: View {
                                 if ((f["checks"] as? [J]) ?? []).isEmpty { mono("waiting for the Session Manager to wake this session", Ink.grey, 10.5) }
                             }.padding(.leading, 16)
                         }
+                        if let sid = r["sid"] as? String, !sid.isEmpty {
+                            SessionsPanel.labelRow(m, r, sid)
+                        }
                         if let m = r["modes"] as? J {
                             chips([Chip(label: "MODEL", value: m["model"] as? String), Chip(label: "PERMISSION", value: (m["permission"] as? String).map { $0 == "normal" ? "default" : $0 }),
                                    Chip(label: "RC", value: (m["rc"] as? Bool).map { $0 ? "ON" : "OFF" }), Chip(label: "CONTEXT", value: pct(m["ctx"]))]).padding(.leading, 16)
@@ -563,6 +605,14 @@ struct SessionsPanel: View {
                             mono("workers: " + ws.map { (($0["id"] as? String) ?? "").prefix(7) + " (" + (($0["model"] as? String) ?? "model unknown") + ")" }.joined(separator: " · "), Ink.dim, 10.5).padding(.leading, 16)
                         }
                     }
+                }
+            }
+            let ll = (m0["label_log"] as? [J]) ?? []
+            if !ll.isEmpty {
+                Rectangle().fill(Ink.line).frame(height: 1)
+                mono("LABEL LOG", Ink.grey, 10.5)
+                ForEach(Array(ll.enumerated()), id: \.offset) { _, e in
+                    mono(String((e["at"] as? String ?? "").suffix(8)) + "  " + (e["session"] as? String ?? "") + ": " + ((e["from"] as? String) ?? "none") + " → " + (e["to"] as? String ?? "") + "  (" + (e["by"] as? String ?? "") + ")", Ink.dim, 10.5)
                 }
             }
             mono("Master list: " + (all["source"] as? String ?? "none") + (((all["updated"] as? String) ?? "").isEmpty ? "" : " · as of " + (all["updated"] as? String ?? "")), Ink.grey, 10)

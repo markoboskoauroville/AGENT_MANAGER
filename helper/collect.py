@@ -102,6 +102,29 @@ def short_model(mid):
     return mid
 
 
+def labels_state():
+    out = {}
+    for f in glob.glob(HOME + "/.mantra-os/labels/*.json"):
+        out[os.path.basename(f)[:-5]] = jread(f)
+    return out
+
+
+def label_log():
+    try:
+        with open(HOME + "/.mantra-os/labels/log.jsonl") as fh:
+            return [json.loads(l) for l in fh.read().splitlines()[-8:]][::-1]
+    except Exception:
+        return []
+
+
+def start_labeler():
+    """one detached pass of ceo_labels.py per tick; it holds its own lock and calls Haiku only when a session's content changed"""
+    h = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ceo_labels.py")
+    if os.path.exists(h):
+        subprocess.Popen(["/usr/bin/python3", "-I", h, "run"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+
+
 def mac():
     out = {"name": "This Mac", "ok": True, "sessions": [], "other": [], "settings": settings_facts()}
     sessions = []
@@ -162,7 +185,7 @@ def mac():
         else:
             modes["current_model"], modes["current_source"] = short_model(jread(HOME + "/.claude/settings.json").get("model")), "configured model (settings)"
         workers = [{"id": t["id"], "model": t.get("model"), "desc": t.get("desc", "")} for t in tasks if t["kind"] == "agent" and t["running"]]
-        out["sessions"].append({"workers": workers, "modes": modes, "name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
+        out["sessions"].append({"label": labels_state().get(sid), "base": s.get("base"), "workers": workers, "modes": modes, "name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
                                 "status": s.get("status"), "last": (s.get("last") or "")[:160], "tasks": tasks[:12],
                                 "tasks_total": len(tasks), "tasks_running": sum(1 for t in tasks if t["running"])})
     rc, o = run(["/bin/ps", "-axo", "pid=,command="], 4)
@@ -334,7 +357,8 @@ def merge_sessions(res):
         if old:
             rows.pop(old["name"], None)
         rows[s["name"]] = {"name": s["name"], "kind": (old or {}).get("kind") or "interactive", "state": s.get("status"), "device": "Mac",
-                           "source": "probed", "as_of": now, "modes": s.get("modes"), "last": s.get("last"), "workers": s.get("workers")}
+                           "source": "probed", "as_of": now, "modes": s.get("modes"), "last": s.get("last"), "workers": s.get("workers"),
+                           "sid": s.get("sid"), "label": s.get("label"), "base": s.get("base")}
     live = lambda dev: any(v["device"] == dev and v["state"] in ("busy", "idle") for v in rows.values())
     vm = res["vm"]
     if vm.get("ok") and vm.get("claude") and not live("chromium-vm"):
@@ -403,6 +427,9 @@ def main():
                 res[k] = {"name": k, "ok": False, "note": "collector failed: " + type(e).__name__}
     ts.pop("ips", None)
     res["tailnet"] = ts
+    res["label_log"] = label_log()
+    if "--no-labels" not in sys.argv and "--text" not in sys.argv:
+        start_labeler()
     res["retire"] = retire()
     res["sessions_all"] = merge_sessions(res)
     res["time"] = time.strftime("%H:%M:%S")
