@@ -484,6 +484,15 @@ func makerSummary(_ a: J) -> String {
 }
 
 struct MakerPanel: View {
+    static func line(_ e: J) -> String {
+        let stamp: String = (e["ts"] as? String) ?? (e["at"] as? String) ?? ""
+        let hhmmss: String = String(stamp.suffix(14).prefix(8))
+        let k: String = (e["kind"] as? String) ?? ""
+        let n: String = (e["n"] as? Int).map { String($0) } ?? "?"
+        let title: String = (e["title"] as? String) ?? ""
+        let who: String = (e["session"] as? String) ?? ""
+        return "\(hhmmss)  \(k) task \(n): \(title)  [\(who)]"
+    }
     @ObservedObject var m: Model
     let a: J
     var body: some View {
@@ -503,7 +512,7 @@ struct MakerPanel: View {
                 ForEach(Array(log.enumerated()), id: \.offset) { _, e in
                     let k = (e["kind"] as? String) ?? ""
                     let n = (e["n"] as? Int).map { "\($0)" } ?? "?"
-                    mono(String(((e["ts"] as? String) ?? (e["at"] as? String) ?? "").suffix(14).prefix(8)) + "  " + k + " task " + n + ": " + ((e["title"] as? String) ?? "") + "  [" + ((e["session"] as? String) ?? "") + "]", Ink.dim, 10.5)
+                    mono(MakerPanel.line(e), Ink.dim, 10.5)
                 }
             }
             mono("Mod: ~/.claude/dev-mods/…/agent-maker, script ~/.claude/mantra/agent_maker.py; /agent-maker on|off in a session does the same.", Ink.grey, 10)
