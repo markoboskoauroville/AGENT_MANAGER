@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 5
+let VERSION = 6
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -695,6 +695,83 @@ struct TopRow: View {
     static func float(_ on: Bool) { for w in NSApp.windows where w.identifier?.rawValue == "agentmanager" { w.level = on ? .floating : .normal } }
 }
 
+// ---------------------------------------------------------------- the status bar (iTerm style), pinned to the bottom
+struct Seg { let text: String; var color: Color = Ink.text }
+
+func usageColor(_ p: Int?) -> Color { guard let p = p else { return Ink.grey }; return p >= 85 ? Ink.red : (p >= 60 ? Ink.amber : Ink.green) }
+func resetsIn(_ t: Double?) -> String {
+    guard let t = t else { return "" }
+    let h = max(0, Int((t - Date().timeIntervalSince1970) / 3600))
+    return " ↻" + (h >= 48 ? "\(h / 24)d" : "\(h)h")
+}
+/// one flowing line of segments with thin dividers; wraps to a second line instead of cutting
+func strip(_ segs: [Seg]) -> Text {
+    var t = Text("")
+    for (i, g) in segs.enumerated() {
+        if i > 0 { t = t + Text("  │  ").foregroundColor(Ink.line.opacity(2.5)) }
+        t = t + Text(g.text).foregroundColor(g.color)
+    }
+    return t.font(.system(size: 10.5, weight: .medium, design: .monospaced))
+}
+func lab(_ l: String, _ v: String?, _ c: Color = Ink.text) -> Seg { Seg(text: l + " " + (v ?? "unknown"), color: v == nil ? Ink.grey : c) }
+
+struct StatusBar: View {
+    let data: J
+    static func globalSegs(_ st: J) -> [Seg] {
+        let rl = ((st["usage"] as? J)?["rate_limits"] as? J) ?? [:]
+        let f = rl["five_hour"] as? J, w = rl["seven_day"] as? J
+        let fp = f?["used_percentage"] as? Int, wp = w?["used_percentage"] as? Int
+        var out: [Seg] = [Seg(text: "ALL SESSIONS", color: Ink.amber)]
+        out.append(lab("model", st["model"] as? String))
+        out.append(lab("effort", st["effort_default"] as? String))
+        out.append(lab("RC@start", (st["rc_at_startup"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))
+        out.append(lab("router", (st["router_plugin"] as? Bool).map { $0 ? "plugin on" : "plugin off" }))
+        out.append(lab("fast", (st["fast_mode"] as? Bool).map { $0 ? "on" : "off" }))
+        out.append(Seg(text: "5h " + (fp.map { "\($0)%" } ?? "unknown") + resetsIn(f?["resets_at"] as? Double), color: usageColor(fp)))
+        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown") + resetsIn(w?["resets_at"] as? Double), color: usageColor(wp)))
+        return out
+    }
+    static func sessionSegs(_ s: J) -> [Seg] {
+        let m = (s["modes"] as? J) ?? [:]
+        let name = ((s["name"] as? String) ?? "?")
+        let perm = (m["permission"] as? String).map { $0 == "normal" ? "default" : $0 }
+        let rt = routerText(m["router"] as? String, m["router_pick"] as? String)
+        let ctx = m["ctx"] as? Int, sp = m["sp"] as? Int, wp = m["wp"] as? Int
+        let mcp = (m["mcp"] as? [String]) ?? []
+        let agents = ((s["tasks"] as? [J]) ?? []).filter { ($0["kind"] as? String) == "agent" && (($0["running"] as? Bool) ?? false) }.count
+        var out: [Seg] = [Seg(text: name, color: (s["status"] as? String) == "busy" ? Ink.green : Ink.text)]
+        out.append(lab("model", m["model"] as? String)); out.append(lab("effort", m["effort"] as? String))
+        out.append(lab("perm", perm, perm == "auto" ? Ink.green : Ink.text))
+        out.append(lab("RC", (m["rc"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))
+        out.append(lab("router", rt, (m["router"] as? String) == "off" ? Ink.amber : Ink.text))
+        out.append(Seg(text: "ctx " + (ctx.map { "\($0)%" } ?? "unknown"), color: usageColor(ctx)))
+        out.append(Seg(text: "5h " + (sp.map { "\($0)%" } ?? "unknown"), color: usageColor(sp)))
+        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown"), color: usageColor(wp)))
+        out.append(Seg(text: "agents \(agents)", color: agents > 0 ? Ink.amber : Ink.grey))
+        out.append(lab("mcp", mcp.isEmpty ? "none" : mcp.joined(separator: ",")))
+        return out
+    }
+    var body: some View {
+        let mac = (data["mac"] as? J) ?? [:]
+        let sessions = (mac["sessions"] as? [J]) ?? []
+        VStack(spacing: 0) {
+            Rectangle().fill(Ink.line).frame(height: 1)
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 5) {
+                    strip(StatusBar.globalSegs((mac["settings"] as? J) ?? [:])).fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(sessions.enumerated()), id: \.offset) { _, s in
+                        strip(StatusBar.sessionSegs(s)).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 7)
+            }
+            .frame(maxHeight: 118)
+        }
+        .background(Color.black.opacity(0.35)).fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("statusbar")
+    }
+}
+
 struct Root: View {
     @ObservedObject var m: Model
     let margin: CGFloat = 16
@@ -731,7 +808,6 @@ struct Root: View {
                         if ((m.data["plans"] as? [J]) ?? []).isEmpty && !m.data.isEmpty {
                             mono("No plan yet. The master session writes ~/.mantra-os/plans/<slug>.json (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a).", Ink.grey, 11)
                         }
-                        if m.solo.isEmpty { HeaderStrip(st: (((m.data["mac"] as? J)?["settings"]) as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "sessions" { SessionsPanel(m: m, all: (m.data["sessions_all"] as? J) ?? [:], net: (m.data["tailnet"] as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "sessions" { MacPanel(d: (m.data["mac"] as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "vm" { VMPanel(d: (m.data["vm"] as? J) ?? [:]) }
@@ -743,6 +819,7 @@ struct Root: View {
                     .padding(margin)
                 }
             }
+            StatusBar(data: m.data)
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(Ink.ground)
