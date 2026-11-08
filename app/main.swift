@@ -121,7 +121,7 @@ func mono(_ s: String, _ c: Color = Ink.text, _ size: CGFloat = 12) -> some View
 
 /// label + value; "unknown" in grey where the value cannot be read from any file
 struct Chip { let label: String; let value: String?; var color: Color = Ink.text }
-func chips(_ items: [Chip]) -> some View {
+@ViewBuilder func chips(_ items: [Chip]) -> some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 4) {
         ForEach(Array(items.enumerated()), id: \.offset) { _, c in
             HStack(spacing: 5) {
