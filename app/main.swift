@@ -156,21 +156,21 @@ func modeChips(_ m: J, agents: Int) -> [Chip] {
 /// the header strip: what is set for every session (settings.json) and the plan usage of the account
 struct HeaderStrip: View {
     let st: J
+    static func w(_ u: J, _ k: String) -> String? {
+        guard let x = u[k] as? J, let p = x["used_percentage"] as? Int else { return nil }
+        var t = "\(p)% used"
+        if let r = x["resets_at"] as? Double { let h = max(0, Int((r - Date().timeIntervalSince1970) / 3600)); t += " · resets in " + (h >= 48 ? "\(h / 24)d" : "\(h)h") }
+        return t
+    }
     var body: some View {
         let u = ((st["usage"] as? J)?["rate_limits"] as? J) ?? [:]
-        func w(_ k: String) -> String? {
-            guard let x = u[k] as? J, let p = x["used_percentage"] as? Int else { return nil }
-            var t = "\(p)% used"
-            if let r = x["resets_at"] as? Double { let h = max(0, Int((r - Date().timeIntervalSince1970) / 3600)); t += " · resets in " + (h >= 48 ? "\(h / 24)d" : "\(h)h") }
-            return t
-        }
         Panel(title: "Every session: modes and usage", state: "from settings.json and the status line") {
             chips([Chip(label: "DEFAULT MODEL", value: st["model"] as? String), Chip(label: "EFFORT", value: st["effort_default"] as? String),
                    Chip(label: "RC AT START", value: (st["rc_at_startup"] as? Bool).map { $0 ? "ON" : "OFF" }, color: Ink.green),
                    Chip(label: "ROUTER PLUGIN", value: (st["router_plugin"] as? Bool).map { $0 ? "enabled" : "disabled" }),
                    Chip(label: "FAST MODE", value: (st["fast_mode"] as? Bool).map { $0 ? "ON" : "OFF" }),
-                   Chip(label: "5-HOUR WINDOW", value: w("five_hour"), color: Ink.amber),
-                   Chip(label: "WEEK", value: w("seven_day"), color: Ink.amber)])
+                   Chip(label: "5-HOUR WINDOW", value: HeaderStrip.w(u, "five_hour"), color: Ink.amber),
+                   Chip(label: "WEEK", value: HeaderStrip.w(u, "seven_day"), color: Ink.amber)])
         }
     }
 }
