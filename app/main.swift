@@ -438,6 +438,25 @@ func stateColor(_ st: String) -> Color {
     switch st { case "busy", "running": return Ink.green; case "idle": return Ink.text; case "pending", "waiting": return Ink.amber; case "offline": return Ink.grey; default: return Ink.dim }
 }
 
+struct LabelLogView: View {
+    let ll: [J]
+    static func line(_ e: J) -> String {
+        let at = String((e["at"] as? String ?? "").suffix(8))
+        let who = e["session"] as? String ?? ""
+        let from = (e["from"] as? String) ?? "none"
+        let to = e["to"] as? String ?? ""
+        let by = e["by"] as? String ?? ""
+        return at + "  " + who + ": " + from + " → " + to + "  (" + by + ")"
+    }
+    var body: some View {
+        if !ll.isEmpty {
+            Rectangle().fill(Ink.line).frame(height: 1)
+            mono("LABEL LOG", Ink.grey, 10.5)
+            ForEach(Array(ll.enumerated()), id: \.offset) { _, e in mono(LabelLogView.line(e), Ink.dim, 10.5) }
+        }
+    }
+}
+
 struct SessionsPanel: View {
     @ObservedObject var m: Model
     let all: J; let net: J
@@ -607,14 +626,7 @@ struct SessionsPanel: View {
                     }
                 }
             }
-            let ll = (m0["label_log"] as? [J]) ?? []
-            if !ll.isEmpty {
-                Rectangle().fill(Ink.line).frame(height: 1)
-                mono("LABEL LOG", Ink.grey, 10.5)
-                ForEach(Array(ll.enumerated()), id: \.offset) { _, e in
-                    mono(String((e["at"] as? String ?? "").suffix(8)) + "  " + (e["session"] as? String ?? "") + ": " + ((e["from"] as? String) ?? "none") + " → " + (e["to"] as? String ?? "") + "  (" + (e["by"] as? String ?? "") + ")", Ink.dim, 10.5)
-                }
-            }
+            LabelLogView(ll: (m0["label_log"] as? [J]) ?? [])
             mono("Master list: " + (all["source"] as? String ?? "none") + (((all["updated"] as? String) ?? "").isEmpty ? "" : " · as of " + (all["updated"] as? String ?? "")), Ink.grey, 10)
         }
     }
