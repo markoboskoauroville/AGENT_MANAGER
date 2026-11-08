@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 10
+let VERSION = 11
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -35,6 +35,17 @@ func helperURL() -> URL? {
     if let u = Bundle.main.url(forResource: "collect", withExtension: "py") { return u }
     let dev = URL(fileURLWithPath: NSString(string: "~/Developer/AGENT_MANAGER/helper/collect.py").expandingTildeInPath)
     return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
+}
+
+/// the phone door (helper/server.py, Tailscale address only, port 8847): this app owns it, starts it and ends it with itself
+var phoneDoor: Process?
+func startPhoneDoor() {
+    guard let c = helperURL() else { return }
+    let s = c.deletingLastPathComponent().appendingPathComponent("server.py").path
+    guard FileManager.default.fileExists(atPath: s) else { return }
+    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); p.arguments = ["-I", s]
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    do { try p.run(); phoneDoor = p } catch {}
 }
 
 /// runs the helper; kills it after `limit` seconds so nothing waits for a dead machine
@@ -1010,7 +1021,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
         if !args.contains("--login") { show() }
         model.start()
+        startPhoneDoor()
     }
+    func applicationWillTerminate(_ n: Notification) { phoneDoor?.terminate() }
     func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     func applicationShouldTerminateAfterLastWindowClosed(_ a: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ a: NSApplication, hasVisibleWindows f: Bool) -> Bool { show(); return true }

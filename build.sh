@@ -7,7 +7,7 @@ V=$(sed -n 's/^let VERSION = \([0-9]*\)/\1/p' app/main.swift)
 APP="build/Agent Manager (Mantra).app"
 rm -rf build; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -swift-version 5 -o "$APP/Contents/MacOS/AgentManager" app/*.swift -framework AppKit -framework SwiftUI
-cp helper/collect.py "$APP/Contents/Resources/collect.py"
+cp helper/collect.py "$APP/Contents/Resources/collect.py"; cp helper/server.py "$APP/Contents/Resources/server.py"
 cp master-prompt.txt "$APP/Contents/Resources/master-prompt.txt"; cp helper/ceo_labels.py "$APP/Contents/Resources/ceo_labels.py"; cp retire-prompt.txt "$APP/Contents/Resources/retire-prompt.txt"
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PL
