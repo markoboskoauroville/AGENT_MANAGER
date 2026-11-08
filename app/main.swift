@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 3
+let VERSION = 4
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -371,7 +371,7 @@ struct TotalsStrip: View {
         let tiles: [(String, String, String, Color)] = [
             ("done", "\(cnt(all, "done"))", "DONE", Ink.green), ("running", "\(cnt(all, "running"))", "RUNNING", Ink.amber),
             ("paused", "\(cnt(all, "paused"))", "PAUSED", Ink.dim), ("failed", "\(cnt(all, "failed"))", "FAILED", Ink.red),
-            ("todo", "\(cnt(all, "todo"))", "TO DO", Ink.grey), ("sessions", "\(sess)", "SESSIONS", Ink.text),
+            ("todo", "\(cnt(all, "todo"))", "TO DO", Ink.grey), ("sessions", "\(((d["sessions_all"] as? J)?["rows"] as? [J])?.count ?? sess)", "SESSIONS", Ink.text),
             ("vm", vmUp ? "UP" : "DOWN", "VM", vmUp ? Ink.green : Ink.red)]
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
@@ -399,6 +399,62 @@ struct TotalsStrip: View {
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 12).fill(Ink.panel))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Ink.line, lineWidth: 1))
+    }
+}
+
+// ---------------------------------------------------------------- sessions everywhere
+func stateColor(_ st: String) -> Color {
+    switch st { case "busy", "running": return Ink.green; case "idle": return Ink.text; case "pending", "waiting": return Ink.amber; case "offline": return Ink.grey; default: return Ink.dim }
+}
+
+struct SessionsPanel: View {
+    let all: J; let net: J
+    var body: some View {
+        let rows = (all["rows"] as? [J]) ?? []
+        let devs = (net["devices"] as? [J]) ?? []
+        let tot = (all["totals"] as? [String: [String: Int]]) ?? [:]
+        let order = Array(Set(rows.compactMap { $0["device"] as? String })).sorted { a, b in
+            let w: (String) -> Int = { $0 == "Mac" ? 0 : $0 == "chromium-vm" ? 1 : $0 == "cloud" ? 9 : 5 }
+            return (w(a), a) < (w(b), b) }
+        let busy = rows.filter { ($0["state"] as? String) == "busy" || ($0["state"] as? String) == "running" }.count
+        let off = rows.filter { ($0["state"] as? String) == "offline" }.count
+        Panel(title: "Sessions on every machine", state: "\(rows.count) sessions · \(busy) working · \(off) offline", good: nil) {
+            // devices on the tailnet
+            mono("DEVICES  (Tailscale)", Ink.grey, 10.5)
+            chips(devs.map { d in
+                let on = (d["online"] as? Bool) ?? false
+                return Chip(label: (on ? "● " : "○ ") + (d["name"] as? String ?? "?"),
+                            value: ((d["os"] as? String) ?? "") + (on ? " online" : " offline" + (((d["last_seen"] as? String) ?? "").isEmpty ? "" : " since " + String(((d["last_seen"] as? String) ?? "").prefix(10))),
+                            color: on ? Ink.green : Ink.red) })
+            if devs.isEmpty { mono("Tailscale did not answer", Ink.amber, 11) }
+            Rectangle().fill(Ink.line).frame(height: 1)
+            mono("TOTALS BY DEVICE", Ink.grey, 10.5)
+            chips(order.map { dv in
+                let t = tot[dv] ?? [:]
+                return Chip(label: dv, value: ["busy", "running", "idle", "pending", "waiting", "offline"].compactMap { k in t[k].map { "\($0) \(k)" } }.joined(separator: " · "), color: Ink.text) })
+            ForEach(order, id: \.self) { dv in
+                Rectangle().fill(Ink.line).frame(height: 1)
+                mono(dv.uppercased(), Ink.grey, 10.5)
+                ForEach(Array(rows.filter { ($0["device"] as? String) == dv }.enumerated()), id: \.offset) { _, r in
+                    let stt = r["state"] as? String ?? "unknown"
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Dot(on: (stt == "busy" || stt == "running") ? true : (stt == "offline" ? false : nil))
+                            Text(r["name"] as? String ?? "?").font(.system(size: 12.5, weight: .bold)).foregroundStyle(stt == "offline" ? Ink.dim : Ink.text)
+                            Text(stt.uppercased()).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(stateColor(stt))
+                            Spacer(minLength: 4)
+                            mono((r["kind"] as? String ?? "") + " · " + (r["source"] as? String ?? "") + " " + (((r["as_of"] as? String) ?? "").suffix(8).prefix(8)), Ink.grey, 10)
+                        }
+                        if let m = r["modes"] as? J {
+                            chips([Chip(label: "MODEL", value: m["model"] as? String), Chip(label: "PERMISSION", value: (m["permission"] as? String).map { $0 == "normal" ? "default" : $0 }),
+                                   Chip(label: "RC", value: (m["rc"] as? Bool).map { $0 ? "ON" : "OFF" }), Chip(label: "CONTEXT", value: pct(m["ctx"]))]).padding(.leading, 16)
+                        }
+                        if let l = r["last"] as? String, !l.isEmpty { mono("last: " + l, Ink.dim, 10.5).lineLimit(2).padding(.leading, 16) }
+                    }
+                }
+            }
+            mono("Master list: " + (all["source"] as? String ?? "none") + (((all["updated"] as? String) ?? "").isEmpty ? "" : " · as of " + (all["updated"] as? String ?? "")), Ink.grey, 10)
+        }
     }
 }
 
@@ -578,6 +634,7 @@ struct Root: View {
                             mono("No plan yet. The master session writes ~/.mantra-os/plans/<slug>.json (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a).", Ink.grey, 11)
                         }
                         if m.solo.isEmpty { HeaderStrip(st: (((m.data["mac"] as? J)?["settings"]) as? J) ?? [:]) }
+                        if m.solo.isEmpty || m.solo == "sessions" { SessionsPanel(all: (m.data["sessions_all"] as? J) ?? [:], net: (m.data["tailnet"] as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "sessions" { MacPanel(d: (m.data["mac"] as? J) ?? [:]) }
                         if m.solo.isEmpty || m.solo == "vm" { VMPanel(d: (m.data["vm"] as? J) ?? [:]) }
                         if m.solo.isEmpty { PhonesPanel(d: (m.data["phones"] as? J) ?? [:])

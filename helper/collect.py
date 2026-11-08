@@ -198,7 +198,7 @@ def phones():
         d = {"serial": s, "model": "", "claude_code": False, "claude_app": False}
         rc, m = run([ADB, "-s", s, "shell", "getprop ro.product.model; getprop ro.serialno"], 5)
         mm = m.split("\n")
-        d["model"] = mm[0].strip()[:30] or "?"
+        d["model"] = {"A142": "Nothing Phone"}.get(mm[0].strip(), mm[0].strip()[:30] or "?")
         d["uid"] = mm[1].strip() if len(mm) > 1 else s
         d["via"] = "emulator" if s.startswith("emulator") else ("usb" if not re.match(r"^\d+\.\d+", s) else "network")
         if s.startswith("emulator"):
@@ -251,6 +251,84 @@ def plans():
     return out
 
 
+TS_CLI = next((p for p in ("/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale") if os.path.exists(p)), "tailscale")
+
+
+def tailnet():
+    """every device on the tailnet with online / offline (tailscale status --json). Addresses stay inside this process."""
+    out = {"name": "Devices", "ok": False, "devices": [], "ips": {}}
+    rc, o = run([TS_CLI, "status", "--json"], 8)
+    try:
+        d = json.loads(o)
+    except Exception:
+        out["note"] = "tailscale did not answer"
+        return out
+    out["ok"] = True
+    for me, p in [(True, d.get("Self") or {})] + [(False, x) for x in (d.get("Peer") or {}).values()]:
+        ls = p.get("LastSeen") or ""
+        dev = {"name": p.get("HostName"), "os": p.get("OS"), "online": bool(p.get("Online")) or me, "self": me,
+               "last_seen": "" if ls.startswith("0001") else ls}
+        out["devices"].append(dev)
+        ip = next((i for i in (p.get("TailscaleIPs") or []) if "." in i), None)
+        if ip:
+            out["ips"][p.get("HostName")] = ip
+    return out
+
+
+def open_port(ip, port, t=1.5):
+    import socket
+    try:
+        with socket.create_connection((ip, port), timeout=t):
+            return True
+    except OSError:
+        return False
+
+
+def reach_phones(ts):
+    """online android devices on the tailnet whose adb door (5555) is open get an `adb connect`, so phones that were not on adb show up."""
+    for d in ts.get("devices", []):
+        ip = ts["ips"].get(d["name"])
+        if d.get("os") == "android" and d["online"] and ip and open_port(ip, 5555):
+            run([ADB, "connect", ip + ":5555"], 5)
+
+
+def sessions_file():
+    j = jread(HOME + "/.mantra-os/sessions.json")
+    return j if isinstance(j, dict) else {}
+
+
+def merge_sessions(res):
+    """The master's ~/.mantra-os/sessions.json (ListAgents, covers Remote Control and cloud sessions) merged with what this app probes
+    itself. Dedupe by name; the freshest source wins, with 'as of'."""
+    f = sessions_file()
+    rows = {}
+    asof = f.get("updated") or ""
+    for r in f.get("sessions") or []:
+        rows[r.get("name")] = {"name": r.get("name"), "kind": r.get("kind"), "state": r.get("state"), "device": r.get("device") or "unknown",
+                               "source": "master list", "as_of": asof}
+    now = time.strftime("%H:%M:%S")
+    for s in res["mac"].get("sessions", []):
+        old = rows.get(s["name"]) or next((v for v in rows.values() if v["device"] == "Mac" and v["name"].split(" (")[0] == (s["name"] or "").split(" (")[0]), None)
+        if old:
+            rows.pop(old["name"], None)
+        rows[s["name"]] = {"name": s["name"], "kind": (old or {}).get("kind") or "interactive", "state": s.get("status"), "device": "Mac",
+                           "source": "probed", "as_of": now, "modes": s.get("modes"), "last": s.get("last")}
+    live = lambda dev: any(v["device"] == dev and v["state"] in ("busy", "idle") for v in rows.values())
+    vm = res["vm"]
+    if vm.get("ok") and vm.get("claude") and not live("chromium-vm"):
+        rows["chromium-vm Claude Code (tmux claude)"] = {"name": "chromium-vm Claude Code (tmux claude)", "kind": "interactive", "state": "running",
+                                                          "device": "chromium-vm", "source": "probed", "as_of": now, "modes": {"model": (vm.get("bar") or {}).get("model")}}
+    for d in res["phones"].get("devices", []):
+        if d.get("claude_code"):
+            rows["Claude Code on " + d["model"]] = {"name": "Claude Code on " + d["model"], "kind": "Termux", "state": "running", "device": d["model"], "source": "probed", "as_of": now}
+    out = list(rows.values())
+    tot = {}
+    for r in out:
+        t = tot.setdefault(r["device"], {})
+        t[r["state"] or "unknown"] = t.get(r["state"] or "unknown", 0) + 1
+    return {"source": f.get("source") or "no master list yet", "updated": asof, "rows": out, "totals": tot}
+
+
 def cloud():
     out = {"name": "Cloud sessions", "ok": True, "items": [],
            "note": "from the hub's INBOX (messages they pushed); a live list of cloud sessions has no cheap source yet"}
@@ -266,6 +344,11 @@ def cloud():
 
 
 def main():
+    ts = tailnet()
+    try:
+        reach_phones(ts)
+    except Exception:
+        pass
     with ThreadPoolExecutor(4) as ex:
         fs = {k: ex.submit(f) for k, f in (("mac", mac), ("vm", vm), ("phones", phones), ("cloud", cloud))}
         res = {"plans": plans()}
@@ -274,6 +357,9 @@ def main():
                 res[k] = f.result(timeout=25)
             except Exception as e:
                 res[k] = {"name": k, "ok": False, "note": "collector failed: " + type(e).__name__}
+    ts.pop("ips", None)
+    res["tailnet"] = ts
+    res["sessions_all"] = merge_sessions(res)
     res["time"] = time.strftime("%H:%M:%S")
     if "--text" in sys.argv:
         m = res["mac"]
@@ -287,6 +373,10 @@ def main():
             print(f"vm   worker {w['name']}: {w['last']}")
         for d in res["phones"].get("devices", []):
             print(f"phone {d['model']}: claude code {'RUNNING' if d['claude_code'] else 'no'}, claude app {'yes' if d['claude_app'] else 'no'}")
+        for d in res["tailnet"]["devices"]:
+            print(f"net  {d['name']} ({d['os']}): {'online' if d['online'] else 'offline'}")
+        for r in res["sessions_all"]["rows"]:
+            print(f"sess {r['device']}: {r['name']} [{r['kind']}] {r['state']} ({r['source']})")
         for c in res["cloud"]["items"]:
             print(f"cloud {c['name']} ({c['age']}s ago)")
     else:
