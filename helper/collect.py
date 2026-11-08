@@ -135,6 +135,7 @@ def mac():
             sessions = json.loads(o)
         except Exception:
             sessions = []
+    sessions = [s for s in sessions if "/.claude/session-names/haiku" not in (s.get("cwd") or "")]   # the Haiku helper calls are not sessions
     seen = {s.get("pid") for s in sessions}
     for s in sessions:
         sid = s.get("sid", "")
