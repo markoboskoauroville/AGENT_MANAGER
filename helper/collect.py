@@ -92,6 +92,16 @@ def mcp_names(cwd):
     return sorted(names)
 
 
+def short_model(mid):
+    """claude-sonnet-5-5 -> Sonnet 5.5; display names and router picks pass through."""
+    if not mid:
+        return None
+    m = re.match(r"claude-([a-z]+)-(\d+)-(\d+)", mid)
+    if m:
+        return f"{m.group(1).capitalize()} {m.group(2)}.{m.group(3)}"
+    return mid
+
+
 def mac():
     out = {"name": "This Mac", "ok": True, "sessions": [], "other": [], "settings": settings_facts()}
     sessions = []
@@ -121,6 +131,7 @@ def mac():
                     m = json.load(open(meta))
                     t["desc"] = m.get("description", "")
                     t["type"] = m.get("agentType", "")
+                    t["model"] = m.get("model") or None
                 except Exception:
                     pass
             else:
@@ -140,7 +151,18 @@ def mac():
                  "router": rt.get("mode"), "router_pick": rt.get("pick"), "ctx": bar.get("ctx"),
                  "sp": bar.get("sp"), "sx": bar.get("sx"), "wp": bar.get("wp"), "wx": bar.get("wx"),
                  "mcp": mcp_names(s.get("cwd", "")), "fast": None, "version": sj.get("version")}
-        out["sessions"].append({"modes": modes, "name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
+        # the model of the CURRENT task: the router's latest pick for this session, else the last request's model, else the status line, else settings
+        pick = (rt.get("pick") or "").strip()
+        if rt.get("mode") in ("gate", "auto") and pick:
+            modes["current_model"], modes["current_source"] = pick, "router pick for this turn (" + str(rt.get("mode")) + ")"
+        elif tf.get("model_id"):
+            modes["current_model"], modes["current_source"] = short_model(tf["model_id"]), "model of the last request in the transcript"
+        elif bar.get("model"):
+            modes["current_model"], modes["current_source"] = bar["model"], "status line"
+        else:
+            modes["current_model"], modes["current_source"] = short_model(jread(HOME + "/.claude/settings.json").get("model")), "configured model (settings)"
+        workers = [{"id": t["id"], "model": t.get("model"), "desc": t.get("desc", "")} for t in tasks if t["kind"] == "agent" and t["running"]]
+        out["sessions"].append({"workers": workers, "modes": modes, "name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
                                 "status": s.get("status"), "last": (s.get("last") or "")[:160], "tasks": tasks[:12],
                                 "tasks_total": len(tasks), "tasks_running": sum(1 for t in tasks if t["running"])})
     rc, o = run(["/bin/ps", "-axo", "pid=,command="], 4)
@@ -312,7 +334,7 @@ def merge_sessions(res):
         if old:
             rows.pop(old["name"], None)
         rows[s["name"]] = {"name": s["name"], "kind": (old or {}).get("kind") or "interactive", "state": s.get("status"), "device": "Mac",
-                           "source": "probed", "as_of": now, "modes": s.get("modes"), "last": s.get("last")}
+                           "source": "probed", "as_of": now, "modes": s.get("modes"), "last": s.get("last"), "workers": s.get("workers")}
     live = lambda dev: any(v["device"] == dev and v["state"] in ("busy", "idle") for v in rows.values())
     vm = res["vm"]
     if vm.get("ok") and vm.get("claude") and not live("chromium-vm"):

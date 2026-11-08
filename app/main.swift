@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 6
+let VERSION = 7
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -451,6 +451,17 @@ struct SessionsPanel: View {
         }
         return nil
     }
+    /// name, and for a BUSY session the model running its current task in orange parentheses (tooltip: where that came from)
+    @ViewBuilder static func nameText(_ r: J, _ stt: String) -> some View {
+        let name = r["name"] as? String ?? "?"
+        let md = r["modes"] as? J
+        let cur = (stt == "busy" || stt == "running") ? (md?["current_model"] as? String) : nil
+        let t = Text(name).font(.system(size: 12.5, weight: .bold)).foregroundColor(stt == "offline" ? Ink.dim : Ink.text)
+        if let c = cur {
+            (t + Text(" (" + c + ")").font(.system(size: 12.5, weight: .bold)).foregroundColor(Color(red: 1.0, green: 0.55, blue: 0.1)))
+                .help("Model of the current task: " + (md?["current_source"] as? String ?? "unknown source"))
+        } else { t }
+    }
     static func deviceChips(_ devs: [J]) -> [Chip] {
         var out: [Chip] = []
         for d in devs {
@@ -517,7 +528,7 @@ struct SessionsPanel: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Dot(on: (stt == "busy" || stt == "running") ? true : (stt == "offline" ? false : nil))
-                            Text(r["name"] as? String ?? "?").font(.system(size: 12.5, weight: .bold)).foregroundStyle(stt == "offline" ? Ink.dim : Ink.text)
+                            SessionsPanel.nameText(r, stt)
                             Text(stt.uppercased()).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(stateColor(stt))
                             Spacer(minLength: 4)
                             mono((r["kind"] as? String ?? "") + " · " + (r["source"] as? String ?? "") + " " + (((r["as_of"] as? String) ?? "").suffix(8).prefix(8)), Ink.grey, 10)
@@ -548,6 +559,9 @@ struct SessionsPanel: View {
                                    Chip(label: "RC", value: (m["rc"] as? Bool).map { $0 ? "ON" : "OFF" }), Chip(label: "CONTEXT", value: pct(m["ctx"]))]).padding(.leading, 16)
                         }
                         if let l = r["last"] as? String, !l.isEmpty { mono("last: " + l, Ink.dim, 10.5).lineLimit(2).padding(.leading, 16) }
+                        if (stt == "busy" || stt == "running"), let ws = r["workers"] as? [J], !ws.isEmpty {
+                            mono("workers: " + ws.map { (($0["id"] as? String) ?? "").prefix(7) + " (" + (($0["model"] as? String) ?? "model unknown") + ")" }.joined(separator: " · "), Ink.dim, 10.5).padding(.leading, 16)
+                        }
                     }
                 }
             }
@@ -696,7 +710,7 @@ struct TopRow: View {
 }
 
 // ---------------------------------------------------------------- the status bar (iTerm style), pinned to the bottom
-struct Seg { let text: String; var color: Color = Ink.text }
+struct Seg { let text: String; var color: Color = Ink.text; var suffix: String = "" }
 
 func usageColor(_ p: Int?) -> Color { guard let p = p else { return Ink.grey }; return p >= 85 ? Ink.red : (p >= 60 ? Ink.amber : Ink.green) }
 func resetsIn(_ t: Double?) -> String {
@@ -710,6 +724,7 @@ func strip(_ segs: [Seg]) -> Text {
     for (i, g) in segs.enumerated() {
         if i > 0 { t = t + Text("  │  ").foregroundColor(Ink.line.opacity(2.5)) }
         t = t + Text(g.text).foregroundColor(g.color)
+        if !g.suffix.isEmpty { t = t + Text(" (" + g.suffix + ")").foregroundColor(Color(red: 1.0, green: 0.55, blue: 0.1)) }
     }
     return t.font(.system(size: 10.5, weight: .medium, design: .monospaced))
 }
@@ -739,7 +754,8 @@ struct StatusBar: View {
         let ctx = m["ctx"] as? Int, sp = m["sp"] as? Int, wp = m["wp"] as? Int
         let mcp = (m["mcp"] as? [String]) ?? []
         let agents = ((s["tasks"] as? [J]) ?? []).filter { ($0["kind"] as? String) == "agent" && (($0["running"] as? Bool) ?? false) }.count
-        var out: [Seg] = [Seg(text: name, color: (s["status"] as? String) == "busy" ? Ink.green : Ink.text)]
+        let busy = (s["status"] as? String) == "busy"
+        var out: [Seg] = [Seg(text: name, color: busy ? Ink.green : Ink.text, suffix: busy ? (m["current_model"] as? String ?? "") : "")]
         out.append(lab("model", m["model"] as? String)); out.append(lab("effort", m["effort"] as? String))
         out.append(lab("perm", perm, perm == "auto" ? Ink.green : Ink.text))
         out.append(lab("RC", (m["rc"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))
