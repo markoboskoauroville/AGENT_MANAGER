@@ -117,6 +117,19 @@ def label_log():
         return []
 
 
+def agent_maker():
+    """the Agent Maker mod's state (state.json) and the tail of its decision log; the switch is the file enabled"""
+    d = HOME + "/.mantra-os/agent-maker"
+    st = jread(d + "/state.json") or {}
+    st["enabled"] = os.path.exists(d + "/enabled")
+    try:
+        with open(d + "/log.jsonl") as fh:
+            st["log"] = [json.loads(l) for l in fh.read().splitlines()[-6:]][::-1]
+    except Exception:
+        st["log"] = []
+    return st
+
+
 def start_labeler():
     """one detached pass of ceo_labels.py per tick; it holds its own lock and calls Haiku only when a session's content changed"""
     h = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ceo_labels.py")
@@ -429,6 +442,7 @@ def main():
     ts.pop("ips", None)
     res["tailnet"] = ts
     res["label_log"] = label_log()
+    res["agent_maker"] = agent_maker()
     if "--no-labels" not in sys.argv and "--text" not in sys.argv:
         start_labeler()
     res["retire"] = retire()

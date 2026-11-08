@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 8
+let VERSION = 9
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -70,6 +70,20 @@ final class Model: ObservableObject {
             try? p.run(); p.waitUntilExit()
             DispatchQueue.main.async { self.refresh() }
         }
+    }
+    /// Agent Maker (a Claude Code mod): the switch is the file ~/.mantra-os/agent-maker/enabled, present = on
+    func toggleMaker() {
+        let d = NSString(string: "~/.mantra-os/agent-maker").expandingTildeInPath
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: d, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: d + "/enabled") {
+            try? fm.removeItem(atPath: d + "/enabled")
+            fm.createFile(atPath: d + "/disabled-by-hand", contents: Data())
+        } else {
+            try? fm.removeItem(atPath: d + "/disabled-by-hand")
+            fm.createFile(atPath: d + "/enabled", contents: "on\n".data(using: .utf8))
+        }
+        refresh()
     }
     @Published var retireOpen: Set<String> = []
     static func slug(_ n: String) -> String {
@@ -457,6 +471,46 @@ struct LabelLogView: View {
     }
 }
 
+/// "AGENT MAKER on · last: new task 'X' → task 21"
+func makerSummary(_ a: J) -> String {
+    let on = (a["enabled"] as? Bool) ?? false
+    var t = "AGENT MAKER " + (on ? "on" : "off")
+    if let l = a["last"] as? J, let k = l["kind"] as? String, k != "chat" {
+        let title = (l["title"] as? String) ?? ""
+        let n = (l["n"] as? Int).map { "\($0)" } ?? "?"
+        t += k == "new" ? " · last: new task '\(title)' → task \(n)" : " · last: continues task \(n) '\(title)'"
+    } else if on { t += " · waiting for a digression" }
+    return t
+}
+
+struct MakerPanel: View {
+    @ObservedObject var m: Model
+    let a: J
+    var body: some View {
+        let on = (a["enabled"] as? Bool) ?? false
+        Panel(title: "Agent Maker (mod)", state: on ? "ON" : "OFF", good: on ? true : nil) {
+            HStack(spacing: 10) {
+                mono(makerSummary(a), Ink.text, 11)
+                Spacer(minLength: 0)
+                Text(on ? "TURN OFF" : "TURN ON").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(on ? Ink.amber : Ink.green)
+                    .contentShape(Rectangle()).onTapGesture { m.toggleMaker() }
+                    .axButton("Agent Maker switch", id: "makerswitch", value: on ? "on" : "off") { m.toggleMaker() }
+            }
+            let log = (a["log"] as? [J]) ?? []
+            if !log.isEmpty {
+                Rectangle().fill(Ink.line).frame(height: 1)
+                mono("AGENT MAKER LOG", Ink.grey, 10.5)
+                ForEach(Array(log.enumerated()), id: \.offset) { _, e in
+                    let k = (e["kind"] as? String) ?? ""
+                    let n = (e["n"] as? Int).map { "\($0)" } ?? "?"
+                    mono(String(((e["ts"] as? String) ?? (e["at"] as? String) ?? "").suffix(14).prefix(8)) + "  " + k + " task " + n + ": " + ((e["title"] as? String) ?? "") + "  [" + ((e["session"] as? String) ?? "") + "]", Ink.dim, 10.5)
+                }
+            }
+            mono("Mod: ~/.claude/dev-mods/…/agent-maker, script ~/.claude/mantra/agent_maker.py; /agent-maker on|off in a session does the same.", Ink.grey, 10)
+        }
+    }
+}
+
 struct SessionsPanel: View {
     @ObservedObject var m: Model
     let all: J; let net: J
@@ -794,11 +848,13 @@ func lab(_ l: String, _ v: String?, _ c: Color = Ink.text) -> Seg { Seg(text: l 
 
 struct StatusBar: View {
     let data: J
+    static var amState: J? = nil
     static func globalSegs(_ st: J) -> [Seg] {
         let rl = ((st["usage"] as? J)?["rate_limits"] as? J) ?? [:]
         let f = rl["five_hour"] as? J, w = rl["seven_day"] as? J
         let fp = f?["used_percentage"] as? Int, wp = w?["used_percentage"] as? Int
         var out: [Seg] = [Seg(text: "ALL SESSIONS", color: Ink.amber)]
+        if let am = amState { out.append(Seg(text: makerSummary(am), color: (am["enabled"] as? Bool) == true ? Ink.green : Ink.grey)) }
         out.append(lab("model", st["model"] as? String))
         out.append(lab("effort", st["effort_default"] as? String))
         out.append(lab("RC@start", (st["rc_at_startup"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))
@@ -832,6 +888,7 @@ struct StatusBar: View {
     var body: some View {
         let mac = (data["mac"] as? J) ?? [:]
         let sessions = (mac["sessions"] as? [J]) ?? []
+        let _ = { StatusBar.amState = data["agent_maker"] as? J }()
         VStack(spacing: 0) {
             Rectangle().fill(Ink.line).frame(height: 1)
             ScrollView(.vertical) {
@@ -879,6 +936,7 @@ struct Root: View {
                             if !m.openNote.isEmpty { mono(m.openNote, Ink.dim, 11) }
                             Spacer(minLength: 0)
                         }
+                        MakerPanel(m: m, a: (m.data["agent_maker"] as? J) ?? [:])
                         TotalsStrip(m: m, plans: (m.data["plans"] as? [J]) ?? [], d: m.data)
                         ForEach(Array(((m.data["plans"] as? [J]) ?? []).enumerated()), id: \.offset) { _, p in
                             if Root.showPlan(m.solo, p) { PlanCard(m: m, p: p) }
@@ -908,7 +966,7 @@ struct Root: View {
 
 // ---------------------------------------------------------------- app
 let sampleJSON = """
-{"time":"12:00:00","mac":{"ok":true,"settings":{"model":"opus[1m]","effort_default":"medium","rc_at_startup":true,"router_plugin":true,"usage":{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":2000000000},"seven_day":{"used_percentage":35,"resets_at":2000000000}}}},"plans":[{"slug":"example","project":"Example project","goal":"A plan is divided into tasks, each ticked when checked","age":30,"tasks":[{"n":1,"title":"Collector helper","agent":"a1cc","status":"done","checked":true,"report":"done and checked","next":""},{"n":2,"focus":true,"title":"Swift window with a long title that has to wrap and never be cut","agent":"a2dd","status":"running","checked":false,"report":"Half way: cards and bars drawn.","next":"controls"},{"n":3,"title":"Paused job","agent":"a3ee","status":"paused","checked":false,"report":"","next":""},{"n":4,"title":"Publish","agent":"","status":"todo","checked":false,"report":"","next":""},{"n":5,"title":"A failed one","agent":"a5","status":"failed","checked":false,"report":"","next":""}],"commands":[]}],"sessions":[{"modes":{"model":"Opus 5.5","effort":"medium","permission":"auto","rc":true,"router":"off","ctx":30,"sp":12,"sx":"3h","wp":35,"wx":"5d","mcp":[]},"name":"MAC_SES9_08-NOV (Example)","status":"busy","folder":"~/Developer/claude-code","last":"a prompt, shortened to two lines at most","tasks_running":1,"tasks_total":2,"tasks":[{"id":"a1b2c3","kind":"agent","running":true,"age":12,"desc":"Star app: Agent Manager"},{"id":"bx9","kind":"shell","running":false,"age":3600,"desc":"15:38:10 push started"}]},{"name":"MAC_SES8_08-NOV (GitHub)","status":"idle","folder":"~/Developer/claude-code","last":"","tasks_running":0,"tasks_total":0,"tasks":[]}],"other":[]},
+{"time":"12:00:00","agent_maker":{"enabled":true,"last":{"kind":"new","n":21,"title":"Concert dates page","at":"12:00:00"},"log":[{"kind":"new","n":21,"title":"Concert dates page","session":"MAC_SES9_08-NOV","ts":"2026-11-09T12:00:00+0100"},{"kind":"continue","n":3,"title":"Band pictures","session":"MAC_SES9_08-NOV","ts":"2026-11-09T11:40:00+0100"}]},"mac":{"ok":true,"settings":{"model":"opus[1m]","effort_default":"medium","rc_at_startup":true,"router_plugin":true,"usage":{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":2000000000},"seven_day":{"used_percentage":35,"resets_at":2000000000}}}},"plans":[{"slug":"example","project":"Example project","goal":"A plan is divided into tasks, each ticked when checked","age":30,"tasks":[{"n":1,"title":"Collector helper","agent":"a1cc","status":"done","checked":true,"report":"done and checked","next":""},{"n":2,"focus":true,"title":"Swift window with a long title that has to wrap and never be cut","agent":"a2dd","status":"running","checked":false,"report":"Half way: cards and bars drawn.","next":"controls"},{"n":3,"title":"Paused job","agent":"a3ee","status":"paused","checked":false,"report":"","next":""},{"n":4,"title":"Publish","agent":"","status":"todo","checked":false,"report":"","next":""},{"n":5,"title":"A failed one","agent":"a5","status":"failed","checked":false,"report":"","next":""}],"commands":[]}],"sessions":[{"modes":{"model":"Opus 5.5","effort":"medium","permission":"auto","rc":true,"router":"off","ctx":30,"sp":12,"sx":"3h","wp":35,"wx":"5d","mcp":[]},"name":"MAC_SES9_08-NOV (Example)","status":"busy","folder":"~/Developer/claude-code","last":"a prompt, shortened to two lines at most","tasks_running":1,"tasks_total":2,"tasks":[{"id":"a1b2c3","kind":"agent","running":true,"age":12,"desc":"Star app: Agent Manager"},{"id":"bx9","kind":"shell","running":false,"age":3600,"desc":"15:38:10 push started"}]},{"name":"MAC_SES8_08-NOV (GitHub)","status":"idle","folder":"~/Developer/claude-code","last":"","tasks_running":0,"tasks_total":0,"tasks":[]}],"other":[]},
 "vm":{"ok":true,"claude":true,"vm_agent":true,"services":[{"name":"agent","active":"active"},{"name":"claude-code","active":"active"},{"name":"worker-gemini","active":"failed"}],"workers":[{"name":"gemini","age":210,"last":"2026-11-08 22:03:43 UTC round done; again in 15 min"}]},
 "phones":{"ok":true,"devices":[{"model":"Pixel 7","via":"usb+network","claude_code":false,"claude_app":true}]},
 "cloud":{"ok":true,"note":"sample","items":[{"name":"session_01Example","age":300,"first":"a message"}]}}
