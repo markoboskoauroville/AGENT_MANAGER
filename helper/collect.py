@@ -230,6 +230,27 @@ def phones():
     return out
 
 
+def plans():
+    """~/.mantra-os/plans/<slug>.json written by the master session (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a),
+    with the newest commands of ~/.mantra-os/commands/<slug>/ (their state: sent, done, failed)."""
+    out = []
+    for f in sorted(glob.glob(HOME + "/.mantra-os/plans/*.json"), key=os.path.getmtime, reverse=True)[:12]:
+        p = jread(f)
+        if not p:
+            continue
+        slug = os.path.basename(f)[:-5]
+        p["slug"] = slug
+        p["age"] = age(os.path.getmtime(f))
+        cmds = []
+        for c in sorted(glob.glob(f"{HOME}/.mantra-os/commands/{slug}/*.json"), key=os.path.getmtime, reverse=True)[:12]:
+            j = jread(c)
+            if j:
+                cmds.append({k: j.get(k) for k in ("id", "agent", "task", "action", "text", "at", "state", "result")})
+        p["commands"] = cmds
+        out.append(p)
+    return out
+
+
 def cloud():
     out = {"name": "Cloud sessions", "ok": True, "items": [],
            "note": "from the hub's INBOX (messages they pushed); a live list of cloud sessions has no cheap source yet"}
@@ -247,7 +268,7 @@ def cloud():
 def main():
     with ThreadPoolExecutor(4) as ex:
         fs = {k: ex.submit(f) for k, f in (("mac", mac), ("vm", vm), ("phones", phones), ("cloud", cloud))}
-        res = {}
+        res = {"plans": plans()}
         for k, f in fs.items():
             try:
                 res[k] = f.result(timeout=25)

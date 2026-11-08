@@ -54,6 +54,21 @@ final class Model: ObservableObject {
     @Published var stamp = "never"
     @Published var busy = false
     @Published var note = ""
+    @Published var open: Set<String> = []          // task rows whose report is expanded: "<slug>#<n>"
+    @Published var drafts: [String: String] = [:]  // the prompt box of each task
+    /// writes one command into the queue the master session reads: ~/.mantra-os/commands/<slug>/<unix-ms>.json
+    func send(slug: String, agent: String, task: Int, action: String, text: String = "") {
+        let dir = NSString(string: "~/.mantra-os/commands/\(slug)").expandingTildeInPath
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let ms = Int(Date().timeIntervalSince1970 * 1000)
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
+        let j: J = ["id": "\(ms)", "agent": agent, "task": task, "action": action, "text": text, "at": f.string(from: Date()), "state": "sent", "result": ""]
+        if let d = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted]) {
+            try? d.write(to: URL(fileURLWithPath: "\(dir)/\(ms).json"), options: .atomic)
+        }
+        drafts["\(slug)#\(task)"] = ""
+        refresh()
+    }
     private var timer: Timer?
     func start() {
         refresh()
@@ -172,6 +187,150 @@ struct HeaderStrip: View {
                    Chip(label: "5-HOUR WINDOW", value: HeaderStrip.w(u, "five_hour"), color: Ink.amber),
                    Chip(label: "WEEK", value: HeaderStrip.w(u, "seven_day"), color: Ink.amber)])
         }
+    }
+}
+
+// ---------------------------------------------------------------- plans: the checklist of each project
+func statusGlyph(_ st: String, _ checked: Bool) -> (String, Color) {
+    switch st {
+    case "done": return (checked ? "✓" : "✓?", Ink.green)     // ✓? = the agent says done, the master has not ticked it yet
+    case "running": return ("●", Ink.amber)
+    case "paused": return ("❚❚", Ink.dim)
+    case "failed": return ("✕", Ink.red)
+    default: return ("○", Ink.grey)
+    }
+}
+
+struct WordButton: View {
+    let word: String; let id: String; var color: Color = Ink.grey; let action: () -> Void
+    var body: some View {
+        Text(word).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(color)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(color.opacity(0.5), lineWidth: 1))
+            .contentShape(Rectangle()).onTapGesture(perform: action).axButton(word, id: id, action)
+    }
+}
+
+struct Bar: View {
+    let done: Int, running: Int, total: Int
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, t = CGFloat(max(total, 1))
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.08))
+                RoundedRectangle(cornerRadius: 3).fill(Ink.amber.opacity(0.55)).frame(width: w * CGFloat(done + running) / t)
+                RoundedRectangle(cornerRadius: 3).fill(Ink.green).frame(width: w * CGFloat(done) / t)
+            }
+        }.frame(height: 6)
+    }
+}
+
+struct TaskRow: View {
+    @ObservedObject var m: Model
+    let slug: String; let t: J; let cmds: [J]
+    var body: some View {
+        let n = t["n"] as? Int ?? 0, key = "\(slug)#\(n)"
+        let st = t["status"] as? String ?? "todo", checked = (t["checked"] as? Bool) ?? false
+        let g = statusGlyph(st, checked)
+        let agent = t["agent"] as? String ?? ""
+        let report = (t["report"] as? String) ?? "", next = (t["next"] as? String) ?? ""
+        let isOpen = m.open.contains(key)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(g.0).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(g.1).frame(width: 26, alignment: .leading)
+                Text("\(n)").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey).frame(width: 16, alignment: .trailing)
+                Text(t["title"] as? String ?? "").font(.system(size: 12.5, weight: st == "running" ? .semibold : .regular))
+                    .foregroundStyle(st == "todo" ? Ink.dim : Ink.text).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Text(isOpen ? "▾" : "▸").foregroundStyle(Ink.grey).font(.system(size: 11))
+            }
+            .contentShape(Rectangle()).onTapGesture { if isOpen { m.open.remove(key) } else { m.open.insert(key) } }
+            .axButton("Task \(n) report", id: "task\(n)") { if isOpen { m.open.remove(key) } else { m.open.insert(key) } }
+            HStack(spacing: 8) {
+                Spacer().frame(width: 50)
+                mono("agent " + (agent.isEmpty ? "unknown" : agent), Ink.dim, 10.5).lineLimit(1)
+                Spacer(minLength: 4)
+                if st == "running" || st == "paused" {
+                    WordButton(word: "PAUSE", id: "pause\(n)") { m.send(slug: slug, agent: agent, task: n, action: "pause") }
+                    WordButton(word: "STOP", id: "stop\(n)", color: Ink.red) { m.send(slug: slug, agent: agent, task: n, action: "stop") }
+                }
+            }
+            if isOpen {
+                VStack(alignment: .leading, spacing: 6) {
+                    mono(report.isEmpty ? "no report yet" : report, report.isEmpty ? Ink.grey : Ink.text, 11.5)
+                    if !next.isEmpty { mono("next: " + next, Ink.dim, 11) }
+                    HStack(spacing: 6) {
+                        TextField("message to this agent", text: Binding(get: { m.drafts[key] ?? "" }, set: { m.drafts[key] = $0 }))
+                            .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text)
+                            .padding(6).background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+                            .accessibilityIdentifier("box\(n)")
+                        WordButton(word: "SEND", id: "send\(n)", color: Ink.green) {
+                            let x = (m.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if !x.isEmpty { m.send(slug: slug, agent: agent, task: n, action: "message", text: x) } }
+                        WordButton(word: "REPROMPT", id: "reprompt\(n)", color: Ink.amber) {
+                            let x = (m.drafts[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if !x.isEmpty { m.send(slug: slug, agent: agent, task: n, action: "reprompt", text: x) } }
+                    }
+                    ForEach(Array(cmds.filter { ($0["task"] as? Int) == n }.prefix(3).enumerated()), id: \.offset) { _, c in
+                        let cs = c["state"] as? String ?? "sent"
+                        mono("\((c["action"] as? String) ?? ""): \(cs)" + (((c["result"] as? String) ?? "").isEmpty ? "" : " · " + (c["result"] as? String ?? "")),
+                             cs == "done" ? Ink.green : cs == "failed" ? Ink.red : Ink.amber, 10.5)
+                    }
+                }
+                .padding(10).background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04))).padding(.leading, 50)
+            }
+        }
+    }
+}
+
+struct PlanCard: View {
+    @ObservedObject var m: Model
+    let p: J
+    var body: some View {
+        let tasks = (p["tasks"] as? [J]) ?? []
+        let slug = p["slug"] as? String ?? ""
+        func st(_ t: J) -> String { t["status"] as? String ?? "todo" }
+        let done = tasks.filter { st($0) == "done" }.count, run = tasks.filter { st($0) == "running" }.count
+        let nowT = tasks.filter { st($0) == "running" || st($0) == "paused" }.map { "\($0["n"] as? Int ?? 0)" }
+        let nextT = tasks.filter { st($0) == "todo" }.prefix(3).map { "\($0["n"] as? Int ?? 0)" }
+        let doneT = tasks.filter { st($0) == "done" }.map { "\($0["n"] as? Int ?? 0)" }
+        Panel(title: p["project"] as? String ?? slug, state: "\(done) of \(tasks.count) done · updated \(ago(p["age"] as? Int ?? 0)) ago", good: done == tasks.count && !tasks.isEmpty ? true : nil) {
+            if let goal = p["goal"] as? String, !goal.isEmpty { mono(goal, Ink.dim, 12) }
+            Bar(done: done, running: run, total: tasks.count).padding(.vertical, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                mono("WHERE WE ARE  " + (nowT.isEmpty ? "nothing running" : "working on " + nowT.joined(separator: ", ")), Ink.amber, 11)
+                mono("DONE  " + (doneT.isEmpty ? "none yet" : doneT.joined(separator: ", ")), Ink.green, 11)
+                mono("NEXT  " + (nextT.isEmpty ? "nothing waiting" : nextT.joined(separator: ", ")), Ink.dim, 11)
+            }.padding(.bottom, 4)
+            ForEach(Array(tasks.enumerated()), id: \.offset) { i, t in
+                TaskRow(m: m, slug: slug, t: t, cmds: (p["commands"] as? [J]) ?? [])
+                if i < tasks.count - 1 { Rectangle().fill(Ink.line).frame(height: 1) }
+            }
+        }
+    }
+}
+
+struct TotalsStrip: View {
+    let plans: [J]; let d: J
+    var body: some View {
+        let all = plans.flatMap { ($0["tasks"] as? [J]) ?? [] }
+        func c(_ s: String) -> Int { all.filter { ($0["status"] as? String) == s }.count }
+        let sess = ((d["mac"] as? J)?["sessions"] as? [J])?.count ?? 0
+        let vmUp = ((d["vm"] as? J)?["ok"] as? Bool) ?? false
+        HStack(spacing: 0) {
+            ForEach(Array([("DONE", c("done"), Ink.green), ("RUNNING", c("running"), Ink.amber), ("PAUSED", c("paused"), Ink.dim),
+                           ("FAILED", c("failed"), Ink.red), ("TO DO", c("todo"), Ink.grey), ("SESSIONS", sess, Ink.text)].enumerated()), id: \.offset) { _, x in
+                VStack(spacing: 2) {
+                    Text("\(x.1)").font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(x.2)
+                    Text(x.0).font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey)
+                }.frame(maxWidth: .infinity)
+            }
+            VStack(spacing: 2) {
+                Text(vmUp ? "UP" : "DOWN").font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(vmUp ? Ink.green : Ink.red)
+                Text("VM").font(.system(size: 9.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey)
+            }.frame(maxWidth: .infinity)
+        }
+        .padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Ink.panel))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Ink.line, lineWidth: 1))
     }
 }
 
@@ -330,6 +489,11 @@ struct Root: View {
                             Text("REFRESH").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(m.busy ? Ink.green : Ink.grey)
                                 .contentShape(Rectangle()).onTapGesture { m.refresh() }.axButton("Refresh", id: "refresh") { m.refresh() }
                         }
+                        TotalsStrip(plans: (m.data["plans"] as? [J]) ?? [], d: m.data)
+                        ForEach(Array(((m.data["plans"] as? [J]) ?? []).enumerated()), id: \.offset) { _, p in PlanCard(m: m, p: p) }
+                        if ((m.data["plans"] as? [J]) ?? []).isEmpty && !m.data.isEmpty {
+                            mono("No plan yet. The master session writes ~/.mantra-os/plans/<slug>.json (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a).", Ink.grey, 11)
+                        }
                         HeaderStrip(st: (((m.data["mac"] as? J)?["settings"]) as? J) ?? [:])
                         MacPanel(d: (m.data["mac"] as? J) ?? [:])
                         VMPanel(d: (m.data["vm"] as? J) ?? [:])
@@ -344,14 +508,14 @@ struct Root: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(Ink.ground)
-        .frame(minWidth: 620, idealWidth: 760, maxWidth: .infinity, minHeight: 480, idealHeight: 720, maxHeight: .infinity)
+        .frame(minWidth: 620, idealWidth: 760, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
         .environment(\.colorScheme, .dark)
     }
 }
 
 // ---------------------------------------------------------------- app
 let sampleJSON = """
-{"time":"12:00:00","mac":{"ok":true,"settings":{"model":"opus[1m]","effort_default":"medium","rc_at_startup":true,"router_plugin":true,"usage":{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":2000000000},"seven_day":{"used_percentage":35,"resets_at":2000000000}}}},"sessions":[{"modes":{"model":"Opus 5.5","effort":"medium","permission":"auto","rc":true,"router":"off","ctx":30,"sp":12,"sx":"3h","wp":35,"wx":"5d","mcp":[]},"name":"MAC_SES9_08-NOV (Example)","status":"busy","folder":"~/Developer/claude-code","last":"a prompt, shortened to two lines at most","tasks_running":1,"tasks_total":2,"tasks":[{"id":"a1b2c3","kind":"agent","running":true,"age":12,"desc":"Star app: Agent Manager"},{"id":"bx9","kind":"shell","running":false,"age":3600,"desc":"15:38:10 push started"}]},{"name":"MAC_SES8_08-NOV (GitHub)","status":"idle","folder":"~/Developer/claude-code","last":"","tasks_running":0,"tasks_total":0,"tasks":[]}],"other":[]},
+{"time":"12:00:00","mac":{"ok":true,"settings":{"model":"opus[1m]","effort_default":"medium","rc_at_startup":true,"router_plugin":true,"usage":{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":2000000000},"seven_day":{"used_percentage":35,"resets_at":2000000000}}}},"plans":[{"slug":"example","project":"Example project","goal":"A plan is divided into tasks, each ticked when checked","age":30,"tasks":[{"n":1,"title":"Collector helper","agent":"a1cc","status":"done","checked":true,"report":"done and checked","next":""},{"n":2,"title":"Swift window with a long title that has to wrap and never be cut","agent":"a2dd","status":"running","checked":false,"report":"Half way: cards and bars drawn.","next":"controls"},{"n":3,"title":"Paused job","agent":"a3ee","status":"paused","checked":false,"report":"","next":""},{"n":4,"title":"Publish","agent":"","status":"todo","checked":false,"report":"","next":""},{"n":5,"title":"A failed one","agent":"a5","status":"failed","checked":false,"report":"","next":""}],"commands":[]}],"sessions":[{"modes":{"model":"Opus 5.5","effort":"medium","permission":"auto","rc":true,"router":"off","ctx":30,"sp":12,"sx":"3h","wp":35,"wx":"5d","mcp":[]},"name":"MAC_SES9_08-NOV (Example)","status":"busy","folder":"~/Developer/claude-code","last":"a prompt, shortened to two lines at most","tasks_running":1,"tasks_total":2,"tasks":[{"id":"a1b2c3","kind":"agent","running":true,"age":12,"desc":"Star app: Agent Manager"},{"id":"bx9","kind":"shell","running":false,"age":3600,"desc":"15:38:10 push started"}]},{"name":"MAC_SES8_08-NOV (GitHub)","status":"idle","folder":"~/Developer/claude-code","last":"","tasks_running":0,"tasks_total":0,"tasks":[]}],"other":[]},
 "vm":{"ok":true,"claude":true,"vm_agent":true,"services":[{"name":"agent","active":"active"},{"name":"claude-code","active":"active"},{"name":"worker-gemini","active":"failed"}],"workers":[{"name":"gemini","age":210,"last":"2026-11-08 22:03:43 UTC round done; again in 15 min"}]},
 "phones":{"ok":true,"devices":[{"model":"Pixel 7","via":"usb+network","claude_code":false,"claude_app":true}]},
 "cloud":{"ok":true,"note":"sample","items":[{"name":"session_01Example","age":300,"first":"a message"}]}}
@@ -363,7 +527,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         let host = NSHostingView(rootView: Root(m: model))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-        window.title = "Agent Manager (Mantra)"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
+        window.title = "Agent Manager (Mantra)"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
         window.contentView = host; window.minSize = NSSize(width: 620, height: 480); window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("AgentManagerWindow"); window.backgroundColor = NSColor(Ink.ground)
         // --shot <png>: drawn off screen at the minimum size (sample data, no network, nothing stored); --shot-live: the real data once
