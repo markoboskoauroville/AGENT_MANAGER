@@ -36,8 +36,64 @@ def files_of(sid):
     return got
 
 
+def jread(path):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return {}
+
+
+def transcript_facts(sid):
+    """model, effort and permission mode from the last 300 KB of the session's transcript (never the whole file)."""
+    f = next(iter(glob.glob(f"{HOME}/.claude/projects/*/{sid}.jsonl")), None)
+    r = {}
+    if not f:
+        return r
+    try:
+        with open(f, "rb") as fh:
+            fh.seek(0, 2)
+            n = fh.tell()
+            fh.seek(max(0, n - 300000))
+            lines = fh.read().decode("utf8", "replace").split("\n")[1:]
+    except OSError:
+        return r
+    for l in lines:
+        if '"type":"assistant"' not in l and '"type":"mode"' not in l:
+            continue
+        try:
+            d = json.loads(l)
+        except Exception:
+            continue
+        if d.get("type") == "mode":
+            r["permission"] = d.get("mode")
+        elif not d.get("isSidechain"):
+            m = (d.get("message") or {}).get("model")
+            if m and m != "<synthetic>":
+                r["model_id"] = m
+            if d.get("effort"):
+                r["effort"] = d["effort"]
+    return r
+
+
+def settings_facts():
+    st = jread(HOME + "/.claude/settings.json")
+    ep = st.get("enabledPlugins") or {}
+    return {"model": st.get("model"), "rc_at_startup": st.get("remoteControlAtStartup"),
+            "router_plugin": ep.get("mantra-router@mantra-router"), "fast_mode": st.get("fastMode"),
+            "effort_default": ((st.get("modelSettings") or {}).get("claude-fable-5") or {}).get("effortLevel") or st.get("effortLevel"),
+            "usage": jread(HOME + "/.cache/claude-usage.json")}
+
+
+def mcp_names(cwd):
+    """names only of the MCP servers configured for the folder (values are never read out)."""
+    j = jread(HOME + "/.claude.json")
+    names = set((j.get("mcpServers") or {}).keys())
+    names |= set((((j.get("projects") or {}).get(cwd) or {}).get("mcpServers") or {}).keys())
+    return sorted(names)
+
+
 def mac():
-    out = {"name": "This Mac", "ok": True, "sessions": [], "other": []}
+    out = {"name": "This Mac", "ok": True, "sessions": [], "other": [], "settings": settings_facts()}
     sessions = []
     p = HOME + "/Developer/claude-code/tools/other_sessions.py"
     if os.path.exists(p):
@@ -75,7 +131,16 @@ def mac():
                     pass
             tasks.append(t)
         tasks.sort(key=lambda t: t["age"])
-        out["sessions"].append({"name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
+        bar = jread(f"{HOME}/.cache/mantra-bar/{sid}.json")
+        rt = jread(f"{HOME}/.cache/mantra-bar/{sid}.router.json")
+        tf = transcript_facts(sid)
+        sj = jread(f"{HOME}/.claude/sessions/{s.get('pid')}.json")
+        modes = {"model": bar.get("model") or tf.get("model_id"), "model_id": tf.get("model_id"), "effort": tf.get("effort"),
+                 "permission": tf.get("permission"), "rc": bar.get("rc") if "rc" in bar else (True if sj.get("bridgeSessionId") else None),
+                 "router": rt.get("mode"), "router_pick": rt.get("pick"), "ctx": bar.get("ctx"),
+                 "sp": bar.get("sp"), "sx": bar.get("sx"), "wp": bar.get("wp"), "wx": bar.get("wx"),
+                 "mcp": mcp_names(s.get("cwd", "")), "fast": None, "version": sj.get("version")}
+        out["sessions"].append({"modes": modes, "name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
                                 "status": s.get("status"), "last": (s.get("last") or "")[:160], "tasks": tasks[:12],
                                 "tasks_total": len(tasks), "tasks_running": sum(1 for t in tasks if t["running"])})
     rc, o = run(["/bin/ps", "-axo", "pid=,command="], 4)
@@ -90,6 +155,8 @@ VM_SCRIPT = r'''
 for u in $(systemctl list-units --no-legend --plain --all "chromium-vm*" | awk '{print $1}'); do
   echo "UNIT $u $(systemctl is-active $u) $(systemctl show -p Description --value $u | cut -c1-90)"; done
 for d in ~/.config/chromium-vm/workers/*/; do n=$(basename $d); [ -f $d/worker.log ] && echo "WORKER $n $(stat -c %Y $d/worker.log) $(tail -n1 $d/worker.log | cut -c1-140)"; done
+b=$(ls -t ~/.cache/mantra-bar/*.json 2>/dev/null | grep -v -E "router|skill|vox" | head -1); [ -n "$b" ] && echo "BAR $(cat $b)"
+r=$(ls -t ~/.cache/mantra-bar/*.router.json 2>/dev/null | head -1); [ -n "$r" ] && echo "ROUTER $(cat $r)"
 echo "CLAUDE $(pgrep -fc '/.local/bin/claude' || true)"
 curl -s -m3 -o /dev/null -w "AGENT %{http_code}\n" http://$(tailscale ip -4 2>/dev/null | head -1):8890/ || echo "AGENT 0"
 '''
@@ -110,6 +177,11 @@ def vm():
         elif p[0] == "WORKER":
             q = line.split(" ", 3)
             out["workers"].append({"name": q[1], "age": age(int(q[2])), "last": q[3] if len(q) > 3 else ""})
+        elif p[0] in ("BAR", "ROUTER"):
+            try:
+                out[p[0].lower()] = json.loads(line.split(" ", 1)[1])
+            except Exception:
+                pass
         elif p[0] == "CLAUDE":
             out["claude"] = int(p[1]) > 0
         elif p[0] == "AGENT":
@@ -185,6 +257,8 @@ def main():
     if "--text" in sys.argv:
         m = res["mac"]
         for s in m.get("sessions", []):
+            mo = s["modes"]
+            print(f"     model {mo['model']} effort {mo['effort']} perm {mo['permission']} rc {mo['rc']} router {mo['router']}->{mo['router_pick']} ctx {mo['ctx']}% 5h {mo['sp']}% week {mo['wp']}%")
             print(f"mac  {s['name']}  {s['status']}  {s['folder']}  tasks {s['tasks_running']}/{s['tasks_total']}")
         v = res["vm"]
         print("vm  ", "up" if v["ok"] else v["note"], ", ".join(f"{x['name']}={x['active']}" for x in v["services"]))
