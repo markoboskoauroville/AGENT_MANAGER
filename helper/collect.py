@@ -310,10 +310,10 @@ def plans():
     return out
 
 
-def blockers():
+def blockers(flag="--all"):
     """open blockers (mantra_block.py list --json --all): records, a SecurityAgent window, plan tasks with status blocked"""
     try:
-        r = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "mantra_block.py"), "list", "--json", "--all"],
+        r = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "mantra_block.py"), "list", "--json", flag],
                            capture_output=True, text=True, timeout=12)
         return json.loads(r.stdout)
     except Exception:
@@ -457,6 +457,7 @@ def main():
         start_labeler()
     res["retire"] = retire()
     res["blockers"] = blockers()
+    res["blockers_archived"] = blockers("--archived")
     res["sessions_all"] = merge_sessions(res)
     res["time"] = time.strftime("%H:%M:%S")
     if "--text" in sys.argv:

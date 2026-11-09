@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 20
+let VERSION = 21
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -117,6 +117,7 @@ final class Model: ObservableObject {
     // ---- WHAT STOPPED ME (v16): the helper mantra_block.py (bundled; the command mantra-block is the same file)
     @Published var answers: [String: String] = [:]
     @Published var blockNote = ""
+    @Published var showArchived = false
     static func blockTool() -> String {
         if let u = Bundle.main.url(forResource: "mantra_block", withExtension: "py") { return u.path }
         return NSString(string: "~/Developer/AGENT_MANAGER/helper/mantra_block.py").expandingTildeInPath
@@ -976,6 +977,16 @@ struct BlockerColumn: View {
                 VStack(alignment: .leading, spacing: 10) {
                     if bs.isEmpty { mono("Nothing is waiting for you", Ink.green, 12) }
                     ForEach(Array(bs.enumerated()), id: \.offset) { _, b in BlockerCard(m: m, b: b) }
+                    let arch = (m.data["blockers_archived"] as? [J]) ?? []
+                    if !arch.isEmpty {
+                        Text((m.showArchived ? "hide archived (" : "archived (") + "\(arch.count))").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey)
+                            .contentShape(Rectangle()).onTapGesture { m.showArchived.toggle() }.axButton("Archived blockers", id: "blockers-archived") { m.showArchived.toggle() }
+                        if m.showArchived { ForEach(Array(arch.enumerated()), id: \.offset) { _, b in
+                            VStack(alignment: .leading, spacing: 2) {
+                                mono(b["text"] as? String ?? "", Ink.dim, 10.5)
+                                mono("removed: " + (b["reason"] as? String ?? (b["solved"] as? String ?? "closed")) + " · task \(b["task"] as? Int ?? 0)", Ink.grey, 10)
+                            }.frame(maxWidth: .infinity, alignment: .leading) } }
+                    }
                 }
             }
         }

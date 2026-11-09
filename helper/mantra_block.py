@@ -79,7 +79,38 @@ def notify(r):
          "at": now_iso(), "state": "sent", "result": "", "via": "mantra-block"}
     open("%s/%d.json" % (d, ms), "w").write(json.dumps(j, indent=1, ensure_ascii=False))
 
+OPEN_ST = ("running", "blocked", "waiting", "paused", "todo")
+
+def task_status(plan, n):
+    for f in plan_files():
+        if plan and os.path.basename(f)[:-5] != plan: continue
+        try: p = json.load(open(f))
+        except Exception: continue
+        for t in p.get("tasks", []):
+            if t.get("n") == n: return t.get("status")
+    return None
+
+def tidy(say=False):
+    """stale cards go away by themselves, into the hidden history (state "archived" + reason):
+    task done / parked / gone = "task finished"; no check and older than 3 h with its task not running or blocked = "old";
+    one card per (task, kind) = "duplicate". The plan-derived blocked cards follow the plan by themselves."""
+    rs = [r for r in read_all().values() if r.get("state") == "open"]; rs.sort(key=lambda r: r.get("at", 0), reverse=True)
+    seen = set(); n = 0
+    for r in rs:
+        why = ""; t = r.get("task") or 0
+        stt = task_status(r.get("plan") or "", t) if t else None
+        if t and stt is not None and stt not in OPEN_ST: why = "task finished (%s)" % stt
+        elif t and stt is None and time.time() - r.get("at", 0) > 3 * 3600 and not r.get("check"): why = "old, task gone"
+        elif not r.get("check") and time.time() - r.get("at", 0) > 3 * 3600 and stt not in ("running", "blocked"): why = "old"
+        elif t and (t, r["kind"]) in seen: why = "duplicate"
+        elif t: seen.add((t, r["kind"]))
+        if why:
+            r["state"] = "archived"; r["reason"] = why; r["archivedAt"] = now_iso(); append(r); n += 1
+            if say: print("archived %s: %s" % (r["id"], why))
+    return n
+
 def cmd_check(a):
+    tidy(True)
     """runs the check of every open blocker (at most every 30 s each); solved ones are closed, mirrored into the plan, and the worker is told"""
     st = checks(); n = 0
     for r in read_all().values():
@@ -131,7 +162,13 @@ def security_agent():
         return int(o or 0) > 0
     except Exception: return False
 
+def archived():
+    out = [r for r in read_all().values() if r.get("state") == "archived"]
+    out.sort(key=lambda r: r.get("archivedAt", ""), reverse=True)
+    return out[:20]
+
 def open_list(auto):
+    tidy()
     out = [r for r in read_all().values() if r.get("state") == "open"]
     if auto:
         if security_agent():
@@ -158,6 +195,7 @@ def open_list(auto):
     return out
 
 def cmd_list(a):
+    if a.archived: print(json.dumps(archived(), ensure_ascii=False)); return
     if a.all:   # the watcher: every list the dashboard asks for starts a check run when 28 s have passed
         try:
             if time.time() - os.path.getmtime(MARK) > 28: raise OSError
@@ -219,7 +257,7 @@ def main():
     s = sub.add_parser("add"); s.add_argument("--task", type=int, default=0); s.add_argument("--who", default="")
     s.add_argument("--kind", required=True); s.add_argument("--text", required=True); s.add_argument("--solve"); s.add_argument("--url"); s.add_argument("--plan"); s.add_argument("--check"); s.add_argument("--file"); s.add_argument("--where"); s.add_argument("--hint"); s.set_defaults(f=cmd_add)
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--answer"); s.set_defaults(f=cmd_done)
-    s = sub.add_parser("list"); s.add_argument("--json", action="store_true"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_list)
+    s = sub.add_parser("list"); s.add_argument("--json", action="store_true"); s.add_argument("--all", action="store_true"); s.add_argument("--archived", action="store_true"); s.set_defaults(f=cmd_list)
     s = sub.add_parser("check"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_check)
     s = sub.add_parser("solve"); s.add_argument("id"); s.set_defaults(f=cmd_solve)
     a = ap.parse_args(); a.f(a)
