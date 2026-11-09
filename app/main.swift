@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 12
+let VERSION = 13
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -243,7 +243,7 @@ func modeChips(_ m: J, agents: Int) -> [Chip] {
             Chip(label: "MCP", value: mcp.isEmpty ? "none" : mcp.joined(separator: ",")),
             Chip(label: "CONTEXT", value: pct(m["ctx"])),
             Chip(label: "5H", value: pct(m["sp"]).map { $0 + ((m["sx"] as? String).map { " · resets " + $0 } ?? "") }),
-            Chip(label: "WEEK", value: pct(m["wp"]).map { $0 + ((m["wx"] as? String).map { " · resets " + $0 } ?? "") })]
+            Chip(label: "WEEK", value: pct(m["wp"]).map { $0 + ((m["wx"] as? String).map { " · resets " + $0 } ?? ""), color: Color(red: 1.0, green: 0.55, blue: 0.1))]
 }
 
 /// the header strip: what is set for every session (settings.json) and the plan usage of the account
@@ -881,7 +881,7 @@ struct StatusBar: View {
         out.append(lab("router", (st["router_plugin"] as? Bool).map { $0 ? "plugin on" : "plugin off" }))
         out.append(lab("fast", (st["fast_mode"] as? Bool).map { $0 ? "on" : "off" }))
         out.append(Seg(text: "5h " + (fp.map { "\($0)%" } ?? "unknown") + resetsIn(f?["resets_at"] as? Double), color: usageColor(fp)))
-        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown") + resetsIn(w?["resets_at"] as? Double), color: usageColor(wp)))
+        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown") + resetsIn(w?["resets_at"] as? Double), color: Color(red: 1.0, green: 0.55, blue: 0.1)))
         return out
     }
     static func sessionSegs(_ s: J) -> [Seg] {
@@ -900,7 +900,7 @@ struct StatusBar: View {
         out.append(lab("router", rt, (m["router"] as? String) == "off" ? Ink.amber : Ink.text))
         out.append(Seg(text: "ctx " + (ctx.map { "\($0)%" } ?? "unknown"), color: usageColor(ctx)))
         out.append(Seg(text: "5h " + (sp.map { "\($0)%" } ?? "unknown"), color: usageColor(sp)))
-        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown"), color: usageColor(wp)))
+        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown"), color: Color(red: 1.0, green: 0.55, blue: 0.1)))
         out.append(Seg(text: "agents \(agents)", color: agents > 0 ? Ink.amber : Ink.grey))
         out.append(lab("mcp", mcp.isEmpty ? "none" : mcp.joined(separator: ",")))
         return out
