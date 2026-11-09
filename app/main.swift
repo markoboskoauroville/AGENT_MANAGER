@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 14
+let VERSION = 15
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -114,22 +114,27 @@ final class Model: ObservableObject {
         refresh()
     }
     func toggleSolo(_ k: String) { solo = solo == k ? "" : k }
-    /// OPEN MANTRA OPERATING SYSTEM: a new iTerm window, Claude Code as the master session with master-prompt.txt as its first prompt
+    /// OPEN MANTRA OPERATING SYSTEM (v15): runs `mantra-master open`: the hand-over (~/.mantra-os/master/STATE.md) is written,
+    /// then a NEW iTerm window on the MacBook screen starts the Master session with the skill master-session (no pile-up).
+    /// ~/.local/bin/mantra-master, else the copy bundled in Resources (mantra_master.py). Its last line goes to the status bar.
     func openMaster() {
         let fm = FileManager.default
-        let prompt = Bundle.main.url(forResource: "master-prompt", withExtension: "txt")?.path
-            ?? NSString(string: "~/Developer/AGENT_MANAGER/master-prompt.txt").expandingTildeInPath
-        let dir = NSString(string: "~/.mantra-os").expandingTildeInPath
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let sh = dir + "/start-master.sh"
-        let body = "#!/bin/zsh -l\ncd ~/Developer/claude-code\nexec claude \"$(cat '\(prompt)')\"\n"
-        try? body.write(toFile: sh, atomically: true, encoding: .utf8)
-        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sh)
-        let script = "tell application \"iTerm\"\nactivate\ncreate window with default profile command \"\(sh)\"\nend tell"
+        let bin = NSString(string: "~/.local/bin/mantra-master").expandingTildeInPath
+        let tool = fm.isExecutableFile(atPath: bin) ? bin
+            : (Bundle.main.url(forResource: "mantra_master", withExtension: "py")?.path ?? NSString(string: "~/Developer/AGENT_MANAGER/helper/mantra_master.py").expandingTildeInPath)
+        openNote = "opening the Master session…"
+        StatusBar.openNote = openNote
         DispatchQueue.global().async {
-            var err: NSDictionary?
-            NSAppleScript(source: script)?.executeAndReturnError(&err)
-            DispatchQueue.main.async { self.openNote = err == nil ? "master session opened in iTerm" : "iTerm did not open: " + ((err?["NSAppleScriptErrorMessage"] as? String) ?? "no answer") }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-lc", "/usr/bin/python3 '\(tool)' open"]
+            let out = Pipe(); p.standardOutput = out; p.standardError = out
+            var text = ""
+            do { try p.run(); p.waitUntilExit(); text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "" }
+            catch { text = "open: mantra-master did not start: \(error.localizedDescription)" }
+            let last = text.split(separator: "\n").last.map(String.init) ?? ""
+            let note = p.terminationStatus == 0 && last.hasPrefix("open:") ? "MASTER ✓ " + String(last.dropFirst(6)) : "MASTER ✗ " + (last.isEmpty ? "mantra-master gave no answer" : last)
+            DispatchQueue.main.async { self.openNote = note; StatusBar.openNote = note }
         }
     }
     @Published var open: Set<String> = []          // task rows whose report is expanded: "<slug>#<n>"
@@ -884,12 +889,14 @@ func lab(_ l: String, _ v: String?, _ c: Color = Ink.text) -> Seg { Seg(text: l 
 struct StatusBar: View {
     let data: J
     static var amState: J? = nil
+    static var openNote = ""   // the last OPEN MANTRA OPERATING SYSTEM result, shown in the ALL SESSIONS line
     static func globalSegs(_ st: J) -> [Seg] {
         let rl = ((st["usage"] as? J)?["rate_limits"] as? J) ?? [:]
         let f = rl["five_hour"] as? J, w = rl["seven_day"] as? J
         let fp = f?["used_percentage"] as? Int, wp = w?["used_percentage"] as? Int
         var out: [Seg] = [Seg(text: "ALL SESSIONS", color: Ink.amber)]
         if let am = amState { out.append(Seg(text: makerSummary(am), color: (am["enabled"] as? Bool) == true ? Ink.green : Ink.grey)) }
+        if !openNote.isEmpty { out.append(Seg(text: openNote, color: openNote.hasPrefix("MASTER ✓") ? Ink.green : (openNote.hasPrefix("MASTER ✗") ? Ink.red : Ink.amber))) }
         out.append(lab("model", st["model"] as? String))
         out.append(lab("effort", st["effort_default"] as? String))
         out.append(lab("RC@start", (st["rc_at_startup"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))

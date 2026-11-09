@@ -5,3 +5,4 @@
 - Release: push to main, the workflow builds and marks vN Latest. Install: `gh release download --repo markoboskoauroville/AGENT_MANAGER --pattern app.zip`, `ditto -x -k`, to /Applications, `codesign -f -s "Mantra Apps"`.
 - Tests: `AgentManager --shot out.png` (sample data, off screen), `--shot-live out.png` (real data), `--json`.
 - Next: actions (stop an agent, go to a session via other_sessions.py front), a tiny local HTTP port, a live list of cloud sessions, Termux claude detection once Claude Code runs there.
+- v15 (9.11.2026): `helper/mantra_master.py` = the command `mantra-master` (symlink in ~/.local/bin, bundled in Resources). The opening prompt is `master-prompt.txt` with `{sid}`; change it there. Test without opening anything: `mantra-master open --dry`.
