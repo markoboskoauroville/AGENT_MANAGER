@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 19
+let VERSION = 20
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -944,6 +944,10 @@ struct BlockerCard: View {
             Text(b["text"] as? String ?? "").font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
             mono((task > 0 ? "task \(task) · " : "") + (b["who"] as? String ?? ""), Ink.dim, 10.5)
             if let h = b["hint"] as? String, !h.isEmpty { Text(h).font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange).fixedSize(horizontal: false, vertical: true) }
+            if (b["has_check"] as? Bool) == true {
+                let at = b["checked_at"] as? Double ?? 0
+                mono(at > 0 ? "checking · last check \(blockAge(max(0, Int(Date().timeIntervalSince1970 - at)))) ago" : "checking…", Ink.dim, 10.5)
+            }
             HStack(spacing: 8) {
                 if hasSolve { pill("SOLVE", Ink.orange, "solve-" + id) { m.solveBlocker(id) } }
                 if !id.hasPrefix("auto-") { pill("DONE", Ink.grey, "done-" + id) { m.doneBlocker(id) } }

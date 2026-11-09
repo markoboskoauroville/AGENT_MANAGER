@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mantra-block: what stopped a worker or the master on something only Marko can do (Agent Manager v16, 9.11.2026).
   mantra-block add --task <n> --who "<worker>" --kind keychain|captcha|hand-test|decision|question|device|login
-                   --text "<one line: what Marko must do>" --where "<app:Name[|window title] | url:<link> | session:<sid or name> | phone[:serial]>" --hint "<one sentence: what to do there>" [--solve "<extra shell command>"] [--url <link>] [--plan <slug>]
+                   --text "<one line: what Marko must do>" --where "<app:Name[|window title] | url:<link> | session:<sid or name> | phone[:serial]>" --hint "<one sentence: what to do there>" --check "<shell command, exit 0 = solved>" [--file <key file>] [--solve "<extra shell command>"] [--url <link>] [--plan <slug>]
   mantra-block done <id> [--answer "..."]     mantra-block list [--json] [--all]     mantra-block solve <id>
 Store: ~/.mantra-os/blockers.jsonl (append only, the last line per id wins). The plan task is mirrored: status "blocked" + "blocker": <id>;
 done puts the old status back. `list --json --all` adds what is found by itself: a SecurityAgent window (keychain) and plan tasks
@@ -46,11 +46,58 @@ def edit_plan(slug, n, fn):
                 return os.path.basename(f)[:-5]
     return None
 
+def default_check(a):
+    """a sensible check for kinds that have one: keychain = no SecurityAgent window; login/key with --file = the file exists and is not empty;
+    device/phone = adb reachable and unlocked. Captcha and the rest need an explicit --check."""
+    if a.kind == "keychain": return "builtin:no-securityagent"
+    if a.kind == "login" and a.file: return "test -s %s" % json.dumps(os.path.expanduser(a.file))
+    w = a.where or ""
+    if a.kind == "device" and w.startswith("phone"):
+        ser = w.partition(":")[2]; ad = "adb" + ((" -s " + ser) if ser else "")
+        return '%s get-state 2>/dev/null | grep -q device && ! %s shell dumpsys window 2>/dev/null | grep -q "isStatusBarKeyguard=true"' % (ad, ad)
+    return ""
+
+CHK = HOME + "/.mantra-os/blockers-checks.json"; MARK = HOME + "/.mantra-os/.blockers-check-run"
+
+def checks():
+    try: return json.load(open(CHK))
+    except Exception: return {}
+
+def run_check(cmd):
+    if cmd == "builtin:no-securityagent": return not security_agent()
+    try:
+        return subprocess.run(["/bin/zsh", "-lc", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
+    except Exception: return False
+
+def notify(r):
+    """tell the waiting worker/master: a command file in the plan's queue, exactly as the dashboard writes it"""
+    slug = r.get("plan") or (os.path.basename(plan_files()[0])[:-5] if plan_files() else "master")
+    d = HOME + "/.mantra-os/commands/" + slug; os.makedirs(d, exist_ok=True)
+    ms = int(time.time() * 1000)
+    j = {"id": str(ms), "agent": r.get("who", ""), "task": r.get("task", 0), "action": "message",
+         "text": "UNBLOCKED: %s (%s). Marko solved it, it was detected automatically; continue." % (r["id"], r.get("text", "")),
+         "at": now_iso(), "state": "sent", "result": "", "via": "mantra-block"}
+    open("%s/%d.json" % (d, ms), "w").write(json.dumps(j, indent=1, ensure_ascii=False))
+
+def cmd_check(a):
+    """runs the check of every open blocker (at most every 30 s each); solved ones are closed, mirrored into the plan, and the worker is told"""
+    st = checks(); n = 0
+    for r in read_all().values():
+        if r.get("state") != "open" or not r.get("check"): continue
+        if not a.force and time.time() - st.get(r["id"], {}).get("at", 0) < 28: continue
+        ok = run_check(r["check"]); st[r["id"]] = {"at": time.time(), "ok": ok}
+        if ok:
+            r["state"] = "done"; r["doneAt"] = now_iso(); r["solved"] = "solved automatically"; append(r); n += 1
+            if r.get("task") and not any(x["state"] == "open" and x.get("task") == r["task"] and x.get("plan") == r.get("plan") for x in read_all().values()):
+                restore(r.get("plan") or "", r["task"], r["id"])
+            notify(r); print("solved automatically " + r["id"])
+    open(CHK + ".tmp", "w").write(json.dumps(st)); os.replace(CHK + ".tmp", CHK)
+
 def cmd_add(a):
     if a.kind not in KINDS: sys.exit("kind must be one of " + ", ".join(KINDS))
     bid = "b" + format(int(time.time() * 1000), "x")
     r = {"id": bid, "state": "open", "at": time.time(), "iso": now_iso(), "task": a.task, "who": a.who, "kind": a.kind,
-         "text": a.text, "solve": a.solve or "", "url": a.url or "", "where": a.where or "", "hint": a.hint or "", "plan": ""}
+         "text": a.text, "solve": a.solve or "", "url": a.url or "", "where": a.where or "", "hint": a.hint or "", "check": a.check or default_check(a), "file": a.file or "", "plan": ""}
     def mark(t):
         if t.get("status") != "blocked": t["prev"] = t.get("status", "running")
         t["status"] = "blocked"; t["blocker"] = bid
@@ -102,11 +149,20 @@ def open_list(auto):
                                 "who": t.get("worker") or t.get("agent") or "plan", "kind": "question", "auto": True,
                                 "text": t.get("next") or t.get("title") or "blocked", "solve": "", "url": "",
                                 "where": ("session:" + p["session"]) if p.get("session") else "", "hint": "Answer in that session."})
+    st = checks()
+    for r in out:
+        r["has_check"] = bool(r.get("check")); r["checked_at"] = st.get(r["id"], {}).get("at", 0)
+        r.pop("check", None)
     out.sort(key=lambda r: r.get("at", 0), reverse=True)
     for r in out: r["age"] = max(0, int(time.time() - r.get("at", time.time())))
     return out
 
 def cmd_list(a):
+    if a.all:   # the watcher: every list the dashboard asks for starts a check run when 28 s have passed
+        try:
+            if time.time() - os.path.getmtime(MARK) > 28: raise OSError
+        except OSError:
+            open(MARK, "w").write(""); subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "check"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     rs = open_list(a.all)
     if a.json: print(json.dumps(rs, ensure_ascii=False)); return
     if not rs: print("Nothing is waiting for you"); return
@@ -161,9 +217,10 @@ def cmd_solve(a):
 def main():
     ap = argparse.ArgumentParser(prog="mantra-block"); sub = ap.add_subparsers(dest="c", required=True)
     s = sub.add_parser("add"); s.add_argument("--task", type=int, default=0); s.add_argument("--who", default="")
-    s.add_argument("--kind", required=True); s.add_argument("--text", required=True); s.add_argument("--solve"); s.add_argument("--url"); s.add_argument("--plan"); s.add_argument("--where"); s.add_argument("--hint"); s.set_defaults(f=cmd_add)
+    s.add_argument("--kind", required=True); s.add_argument("--text", required=True); s.add_argument("--solve"); s.add_argument("--url"); s.add_argument("--plan"); s.add_argument("--check"); s.add_argument("--file"); s.add_argument("--where"); s.add_argument("--hint"); s.set_defaults(f=cmd_add)
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--answer"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("list"); s.add_argument("--json", action="store_true"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_list)
+    s = sub.add_parser("check"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_check)
     s = sub.add_parser("solve"); s.add_argument("id"); s.set_defaults(f=cmd_solve)
     a = ap.parse_args(); a.f(a)
 

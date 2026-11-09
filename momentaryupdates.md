@@ -11,3 +11,5 @@
 **9.11.2026, Marko (on v17):** "In the CEO, add another column on the left side, and you can now remove the status line completely. It just shows any session now running, any agent running, with its model. If it's not running, it disappears from the list. And at the top I need the weekly credits and the session credits clearly seen." and "The right column, What stopped me, has no margin space on the left side. It looks ugly." Status: v18.
 
 **9.11.2026, Marko (on v18):** "The What stopped me column should disappear when there is nothing there. And What stopped me doesn't give me any entry; I cannot answer anything in that column. I need to click Solve, and then you put the window forward and show me how I can do it, in the place of the problem, not remotely, please." Status: v18, records carry --where and --hint; SOLVE raises the real place.
+
+**9.11.2026, Marko:** "Make WHAT STOPPED ME robust. If I solve the problem, detect it, solve it, and remove it from What stopped me." Status: v20, --check on every blocker, watcher every 30 s.
