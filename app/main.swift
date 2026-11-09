@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 17
+let VERSION = 18
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -155,7 +155,6 @@ final class Model: ObservableObject {
         let tool = fm.isExecutableFile(atPath: bin) ? bin
             : (Bundle.main.url(forResource: "mantra_master", withExtension: "py")?.path ?? NSString(string: "~/Developer/AGENT_MANAGER/helper/mantra_master.py").expandingTildeInPath)
         openNote = "opening the Master session…"
-        StatusBar.openNote = openNote
         DispatchQueue.global().async {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -166,7 +165,7 @@ final class Model: ObservableObject {
             catch { text = "open: mantra-master did not start: \(error.localizedDescription)" }
             let last = text.split(separator: "\n").last.map(String.init) ?? ""
             let note = p.terminationStatus == 0 && last.hasPrefix("open:") ? "MASTER ✓ " + String(last.dropFirst(6)) : "MASTER ✗ " + (last.isEmpty ? "mantra-master gave no answer" : last)
-            DispatchQueue.main.async { self.openNote = note; StatusBar.openNote = note }
+            DispatchQueue.main.async { self.openNote = note }
         }
     }
     @Published var open: Set<String> = []          // task rows whose report is expanded: "<slug>#<n>"
@@ -918,69 +917,6 @@ func strip(_ segs: [Seg]) -> Text {
 }
 func lab(_ l: String, _ v: String?, _ c: Color = Ink.text) -> Seg { Seg(text: l + " " + (v ?? "unknown"), color: v == nil ? Ink.grey : c) }
 
-struct StatusBar: View {
-    let data: J
-    static var amState: J? = nil
-    static var openNote = ""   // the last OPEN MANTRA OPERATING SYSTEM result, shown in the ALL SESSIONS line
-    static func globalSegs(_ st: J) -> [Seg] {
-        let rl = ((st["usage"] as? J)?["rate_limits"] as? J) ?? [:]
-        let f = rl["five_hour"] as? J, w = rl["seven_day"] as? J
-        let fp = f?["used_percentage"] as? Int, wp = w?["used_percentage"] as? Int
-        var out: [Seg] = [Seg(text: "ALL SESSIONS", color: Ink.amber)]
-        if let am = amState { out.append(Seg(text: makerSummary(am), color: (am["enabled"] as? Bool) == true ? Ink.green : Ink.grey)) }
-        if !openNote.isEmpty { out.append(Seg(text: openNote, color: openNote.hasPrefix("MASTER ✓") ? Ink.green : (openNote.hasPrefix("MASTER ✗") ? Ink.red : Ink.amber))) }
-        out.append(lab("model", st["model"] as? String))
-        out.append(lab("effort", st["effort_default"] as? String))
-        out.append(lab("RC@start", (st["rc_at_startup"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))
-        out.append(lab("router", (st["router_plugin"] as? Bool).map { $0 ? "plugin on" : "plugin off" }))
-        out.append(lab("fast", (st["fast_mode"] as? Bool).map { $0 ? "on" : "off" }))
-        out.append(Seg(text: "5h " + (fp.map { "\($0)%" } ?? "unknown") + resetsIn(f?["resets_at"] as? Double), color: usageColor(fp)))
-        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown") + resetsIn(w?["resets_at"] as? Double), color: Color(red: 1.0, green: 0.55, blue: 0.1)))
-        return out
-    }
-    static func sessionSegs(_ s: J) -> [Seg] {
-        let m = (s["modes"] as? J) ?? [:]
-        let name = ((s["name"] as? String) ?? "?")
-        let perm = (m["permission"] as? String).map { $0 == "normal" ? "default" : $0 }
-        let rt = routerText(m["router"] as? String, m["router_pick"] as? String)
-        let ctx = m["ctx"] as? Int, sp = m["sp"] as? Int, wp = m["wp"] as? Int
-        let mcp = (m["mcp"] as? [String]) ?? []
-        let agents = ((s["tasks"] as? [J]) ?? []).filter { ($0["kind"] as? String) == "agent" && (($0["running"] as? Bool) ?? false) }.count
-        let busy = (s["status"] as? String) == "busy"
-        var out: [Seg] = [Seg(text: name, color: busy ? Ink.green : Ink.text, suffix: busy ? (m["current_model"] as? String ?? "") : "")]
-        out.append(lab("model", m["model"] as? String)); out.append(lab("effort", m["effort"] as? String))
-        out.append(lab("perm", perm, perm == "auto" ? Ink.green : Ink.text))
-        out.append(lab("RC", (m["rc"] as? Bool).map { $0 ? "on" : "off" }, Ink.green))
-        out.append(lab("router", rt, (m["router"] as? String) == "off" ? Ink.amber : Ink.text))
-        out.append(Seg(text: "ctx " + (ctx.map { "\($0)%" } ?? "unknown"), color: usageColor(ctx)))
-        out.append(Seg(text: "5h " + (sp.map { "\($0)%" } ?? "unknown"), color: usageColor(sp)))
-        out.append(Seg(text: "week " + (wp.map { "\($0)%" } ?? "unknown"), color: Color(red: 1.0, green: 0.55, blue: 0.1)))
-        out.append(Seg(text: "agents \(agents)", color: agents > 0 ? Ink.amber : Ink.grey))
-        out.append(lab("mcp", mcp.isEmpty ? "none" : mcp.joined(separator: ",")))
-        return out
-    }
-    var body: some View {
-        let mac = (data["mac"] as? J) ?? [:]
-        let sessions = (mac["sessions"] as? [J]) ?? []
-        let _ = { StatusBar.amState = data["agent_maker"] as? J }()
-        VStack(spacing: 0) {
-            Rectangle().fill(Ink.line).frame(height: 1)
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 5) {
-                    strip(StatusBar.globalSegs((mac["settings"] as? J) ?? [:])).fixedSize(horizontal: false, vertical: true)
-                    ForEach(Array(sessions.enumerated()), id: \.offset) { _, s in
-                        strip(StatusBar.sessionSegs(s)).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 7)
-            }
-            .frame(maxHeight: 118)
-        }
-        .background(Color.black.opacity(0.35)).fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("statusbar")
-    }
-}
-
 // ---------------------------------------------------------------- WHAT STOPPED ME (v16): the column next to the main interface
 func kindIcon(_ k: String) -> String {
     switch k {
@@ -1045,7 +981,113 @@ struct BlockerColumn: View {
                 }
             }
         }
-        .padding(12).frame(width: 300).background(Ink.panel.opacity(0.6))
+        .padding(16).frame(width: 310).background(Ink.panel.opacity(0.6))
+    }
+}
+
+// ---------------------------------------------------------------- v18: usage header and the RUNNING column
+struct UsageFigure: View {
+    let label: String, p: Int?, reset: String, color: Color
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(label).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.dim)
+                Text(p.map { "\($0)%" } ?? "unknown").font(.system(size: 26, weight: .bold, design: .monospaced)).foregroundStyle(p == nil ? Ink.grey : color)
+                Text(reset).font(.system(size: 11, design: .monospaced)).foregroundStyle(Ink.dim)
+            }
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10)).frame(height: 4)
+                    Capsule().fill(color).frame(width: g.size.width * CGFloat(min(100, max(0, p ?? 0))) / 100, height: 4)
+                }
+            }.frame(height: 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore).accessibilityLabel(label + " usage").accessibilityValue(p.map { "\($0)%" } ?? "unknown")
+    }
+}
+
+struct UsageHeader: View {
+    let data: J
+    var body: some View {
+        let st = ((data["mac"] as? J)?["settings"] as? J) ?? [:]
+        let rl = ((st["usage"] as? J)?["rate_limits"] as? J) ?? [:]
+        let f = rl["five_hour"] as? J, w = rl["seven_day"] as? J
+        let fp = f?["used_percentage"] as? Int, wp = w?["used_percentage"] as? Int
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 28) {
+                UsageFigure(label: "SESSION (5 h)", p: fp, reset: resetsIn(f?["resets_at"] as? Double), color: usageColor(fp))
+                UsageFigure(label: "WEEK", p: wp, reset: resetsIn(w?["resets_at"] as? Double), color: Color(red: 1.0, green: 0.55, blue: 0.1))
+            }
+            strip([lab("model", st["model"] as? String), lab("effort", st["effort_default"] as? String),
+                   lab("RC@start", (st["rc_at_startup"] as? Bool).map { $0 ? "on" : "off" }, Ink.green),
+                   lab("router", (st["router_plugin"] as? Bool).map { $0 ? "plugin on" : "plugin off" }),
+                   Seg(text: ((data["agent_maker"] as? J).map { makerSummary($0) }) ?? "", color: Ink.grey)]).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.35))
+        .accessibilityIdentifier("usageheader")
+    }
+}
+
+/// what runs right now: live sessions (busy, or idle on a device we can reach) and running agents; gone the moment they stop
+func runningRows(_ d: J) -> [(String, String, String, Bool, Bool)] {   // (name, what, model, isAgent, busy)
+    var out: [(String, String, String, Bool, Bool)] = []
+    var seen = Set<String>()
+    let macSessions = ((d["mac"] as? J)?["sessions"] as? [J]) ?? []
+    for r in ((d["sessions_all"] as? J)?["rows"] as? [J]) ?? [] {
+        let state = r["state"] as? String ?? "", dev = r["device"] as? String ?? ""
+        guard state == "busy" || (state == "idle" && dev != "cloud") else { continue }
+        let name = r["name"] as? String ?? "?"
+        let mo = (r["modes"] as? J) ?? [:]
+        let model = (state == "busy" ? mo["current_model"] as? String : nil) ?? mo["model"] as? String ?? "model ?"
+        let last = (r["last"] as? String) ?? ""
+        out.append((name, (dev.isEmpty ? "" : dev + " · ") + state + (last.isEmpty ? "" : " · " + last), model, false, state == "busy"))
+    }
+    for s in macSessions {
+        for t in (s["tasks"] as? [J]) ?? [] where (t["kind"] as? String) == "agent" && ((t["running"] as? Bool) ?? false) {
+            let id = t["id"] as? String ?? ""; seen.insert(id)
+            out.append((t["desc"] as? String ?? "agent", "agent of " + ((s["base"] as? String) ?? (s["name"] as? String ?? "")), t["model"] as? String ?? "model ?", true, true))
+        }
+    }
+    for p in (d["plans"] as? [J]) ?? [] {
+        for t in (p["tasks"] as? [J]) ?? [] where st(t) == "running" {
+            let id = t["agent"] as? String ?? ""
+            if !id.isEmpty && seen.contains(id) { continue }
+            out.append(("\(t["n"] as? Int ?? 0). " + (t["title"] as? String ?? ""), "worker " + ((t["worker"] as? String) ?? "-"), (t["model"] as? String) ?? "model ?", true, true))
+        }
+    }
+    return out
+}
+
+struct RunningColumn: View {
+    @ObservedObject var m: Model
+    var body: some View {
+        let rows = runningRows(m.data)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("RUNNING").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Ink.green).accessibilityIdentifier("running-title")
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if rows.isEmpty { mono("Nothing is running", Ink.grey, 12) }
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Circle().fill(r.4 ? Ink.green : Ink.grey).frame(width: 7, height: 7)
+                                Text(r.3 ? "AGENT" : "SESSION").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(Ink.dim)
+                                Spacer(minLength: 0)
+                                Text(r.2).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange)
+                            }
+                            Text(r.0).font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
+                            Text(r.1).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Ink.dim).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.line, lineWidth: 1))
+                    }
+                }.padding(.trailing, 2)
+            }
+        }
+        .padding(16).frame(width: 270).background(Ink.panel.opacity(0.6))
     }
 }
 
@@ -1060,7 +1102,10 @@ struct Root: View {
     var body: some View {
         VStack(spacing: 0) {
             TopRow().padding(.horizontal, 12).padding(.top, 6)
+            UsageHeader(data: m.data)
             HStack(spacing: 0) {
+            RunningColumn(m: m)
+            Rectangle().fill(Ink.line).frame(width: 1)
             GeometryReader { g in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 12) {
@@ -1101,11 +1146,10 @@ struct Root: View {
             Rectangle().fill(Ink.line).frame(width: 1)
             BlockerColumn(m: m)
             }
-            StatusBar(data: m.data)
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(Ink.ground)
-        .frame(minWidth: 920, idealWidth: 1060, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
+        .frame(minWidth: 1180, idealWidth: 1320, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
         .environment(\.colorScheme, .dark)
     }
 }
@@ -1123,9 +1167,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         let args = CommandLine.arguments
         let host = NSHostingView(rootView: Root(m: model))
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1320, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = ""; window.identifier = NSUserInterfaceItemIdentifier("agentmanager"); window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
-        window.contentView = host; window.minSize = NSSize(width: 920, height: 480); window.isReleasedWhenClosed = false
+        window.contentView = host; window.minSize = NSSize(width: 1180, height: 480); window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("AgentManagerWindow"); window.backgroundColor = NSColor(Ink.ground)
         // --shot <png>: drawn off screen at the minimum size (sample data, no network, nothing stored); --shot-live: the real data once
         if let i = args.firstIndex(where: { $0 == "--shot" || $0 == "--shot-live" }), i + 1 < args.count {
@@ -1134,7 +1178,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if let mac = model.data["mac"] as? J, let pl = mac["plans"] { model.data["plans"] = pl }   // the sample keeps its plan inside "mac"
             model.stamp = (model.data["time"] as? String) ?? "?"
             if let k = args.firstIndex(of: "--solo"), k + 1 < args.count { model.solo = args[k + 1] }
-            var width: CGFloat = 920
+            var width: CGFloat = 1180
             if let k = args.firstIndex(of: "--width"), k + 1 < args.count, let w = Double(args[k + 1]) { width = CGFloat(w) }
             window.setFrame(NSRect(x: -4000, y: -4000, width: width, height: 900), display: false)
             host.frame = NSRect(x: 0, y: 0, width: width, height: 900); host.layoutSubtreeIfNeeded()
