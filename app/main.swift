@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 18
+let VERSION = 19
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -1024,31 +1024,24 @@ struct UsageHeader: View {
     }
 }
 
-/// what runs right now: live sessions (busy, or idle on a device we can reach) and running agents; gone the moment they stop
+/// what works right now: busy sessions and running agents only; gone the moment they stop (no idle rows, v19); no model label when unknown
 func runningRows(_ d: J) -> [(String, String, String, Bool, Bool)] {   // (name, what, model, isAgent, busy)
     var out: [(String, String, String, Bool, Bool)] = []
     var seen = Set<String>()
     let macSessions = ((d["mac"] as? J)?["sessions"] as? [J]) ?? []
     for r in ((d["sessions_all"] as? J)?["rows"] as? [J]) ?? [] {
         let state = r["state"] as? String ?? "", dev = r["device"] as? String ?? ""
-        guard state == "busy" || (state == "idle" && dev != "cloud") else { continue }
+        guard state == "busy" else { continue }
         let name = r["name"] as? String ?? "?"
         let mo = (r["modes"] as? J) ?? [:]
-        let model = (state == "busy" ? mo["current_model"] as? String : nil) ?? mo["model"] as? String ?? "model ?"
+        let model = (state == "busy" ? mo["current_model"] as? String : nil) ?? mo["model"] as? String ?? ""
         let last = (r["last"] as? String) ?? ""
         out.append((name, (dev.isEmpty ? "" : dev + " · ") + state + (last.isEmpty ? "" : " · " + last), model, false, state == "busy"))
     }
     for s in macSessions {
         for t in (s["tasks"] as? [J]) ?? [] where (t["kind"] as? String) == "agent" && ((t["running"] as? Bool) ?? false) {
             let id = t["id"] as? String ?? ""; seen.insert(id)
-            out.append((t["desc"] as? String ?? "agent", "agent of " + ((s["base"] as? String) ?? (s["name"] as? String ?? "")), t["model"] as? String ?? "model ?", true, true))
-        }
-    }
-    for p in (d["plans"] as? [J]) ?? [] {
-        for t in (p["tasks"] as? [J]) ?? [] where st(t) == "running" {
-            let id = t["agent"] as? String ?? ""
-            if !id.isEmpty && seen.contains(id) { continue }
-            out.append(("\(t["n"] as? Int ?? 0). " + (t["title"] as? String ?? ""), "worker " + ((t["worker"] as? String) ?? "-"), (t["model"] as? String) ?? "model ?", true, true))
+            out.append((t["desc"] as? String ?? "agent", "agent of " + ((s["base"] as? String) ?? (s["name"] as? String ?? "")), t["model"] as? String ?? "", true, true))
         }
     }
     return out
@@ -1069,7 +1062,7 @@ struct RunningColumn: View {
                                 Circle().fill(r.4 ? Ink.green : Ink.grey).frame(width: 7, height: 7)
                                 Text(r.3 ? "AGENT" : "SESSION").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(Ink.dim)
                                 Spacer(minLength: 0)
-                                Text(r.2).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange)
+                                if !r.2.isEmpty { Text(r.2).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange) }
                             }
                             Text(r.0).font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
                             Text(r.1).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Ink.dim).lineLimit(2).fixedSize(horizontal: false, vertical: true)
