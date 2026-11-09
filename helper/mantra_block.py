@@ -66,7 +66,7 @@ def restore(slug, n, bid):
 
 def cmd_done(a):
     if a.id.startswith("plan-"):
-        _, slug, n = a.id.split("-", 2); restore(slug, int(n), a.id); print("done " + a.id); return
+        slug, n = a.id[5:].rsplit("-", 1); restore(slug, int(n), a.id); print("done " + a.id); return
     d = read_all(); r = d.get(a.id)
     if not r: sys.exit("no such blocker " + a.id)
     r["state"] = "done"; r["doneAt"] = now_iso()

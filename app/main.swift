@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 16
+let VERSION = 17
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -1026,7 +1026,7 @@ struct BlockerCard: View {
     func pill(_ t: String, _ c: Color, _ id: String, _ a: @escaping () -> Void) -> some View {
         Text(t).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(c == Ink.orange ? Ink.ground : Ink.ground)
             .padding(.horizontal, 12).padding(.vertical, 5).background(RoundedRectangle(cornerRadius: 6).fill(c))
-            .contentShape(Rectangle()).onTapGesture(perform: a).axButton(t, id: id, a)
+            .contentShape(Rectangle()).onTapGesture(perform: a).axButton(t == "DONE" ? "Blocker done" : (t == "SEND" ? "Blocker send" : "Blocker solve"), id: id, a)
     }
 }
 
