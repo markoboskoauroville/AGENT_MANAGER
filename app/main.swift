@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 13
+let VERSION = 14
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -371,6 +371,21 @@ struct TaskRow: View {
     }
 }
 
+/// IN FOCUS is drawn first by the card; then running/paused, then todo/blocked/failed, then DONE newest first (doneAt, else higher n = newer)
+func orderTasks(_ ts: [J]) -> [J] {
+    func rank(_ t: J) -> Int { switch st(t) { case "running", "paused": return 0; case "done": return 2; default: return 1 } }
+    return ts.sorted { a, b in
+        let ra = rank(a), rb = rank(b)
+        if ra != rb { return ra < rb }
+        let na = a["n"] as? Int ?? 0, nb = b["n"] as? Int ?? 0
+        if ra == 2 {
+            let da = a["doneAt"] as? String ?? "", db = b["doneAt"] as? String ?? ""
+            if da != db { return da > db }
+            return na > nb
+        }
+        return na < nb
+    }
+}
 func st(_ t: J) -> String { t["status"] as? String ?? "todo" }
 func cnt(_ all: [J], _ s: String) -> Int { all.filter { ($0["status"] as? String) == s }.count }
 
@@ -400,7 +415,7 @@ struct PlanCard: View {
             }.padding(.bottom, 4)
             let cmds = (p["commands"] as? [J]) ?? []
             let focus = shown.first { ($0["focus"] as? Bool) == true }
-            let rest = shown.filter { ($0["focus"] as? Bool) != true }
+            let rest = orderTasks(shown.filter { ($0["focus"] as? Bool) != true })
             if shown.isEmpty { mono("no task with this status", Ink.grey, 11) }
             if let f = focus {
                 Text("IN FOCUS").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.amber)
