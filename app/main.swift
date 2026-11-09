@@ -243,7 +243,7 @@ func modeChips(_ m: J, agents: Int) -> [Chip] {
             Chip(label: "MCP", value: mcp.isEmpty ? "none" : mcp.joined(separator: ",")),
             Chip(label: "CONTEXT", value: pct(m["ctx"])),
             Chip(label: "5H", value: pct(m["sp"]).map { $0 + ((m["sx"] as? String).map { " · resets " + $0 } ?? "") }),
-            Chip(label: "WEEK", value: pct(m["wp"]).map { $0 + ((m["wx"] as? String).map { " · resets " + $0 } ?? ""), color: Color(red: 1.0, green: 0.55, blue: 0.1))]
+            Chip(label: "WEEK", value: pct(m["wp"]).map { $0 + ((m["wx"] as? String).map { " · resets " + $0 } ?? "") }, color: Color(red: 1.0, green: 0.55, blue: 0.1))]
 }
 
 /// the header strip: what is set for every session (settings.json) and the plan usage of the account
