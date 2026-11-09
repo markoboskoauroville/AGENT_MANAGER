@@ -6,3 +6,4 @@
 - Tests: `AgentManager --shot out.png` (sample data, off screen), `--shot-live out.png` (real data), `--json`.
 - Next: actions (stop an agent, go to a session via other_sessions.py front), a tiny local HTTP port, a live list of cloud sessions, Termux claude detection once Claude Code runs there.
 - v15 (9.11.2026): `helper/mantra_master.py` = the command `mantra-master` (symlink in ~/.local/bin, bundled in Resources). The opening prompt is `master-prompt.txt` with `{sid}`; change it there. Test without opening anything: `mantra-master open --dry`.
+- v16 (9.11.2026): blockers column (BlockerColumn/BlockerCard in app/main.swift, AX ids solve-<id>, send-<id>, done-<id>, answer-<id>); window min width 920. Next: the Android list with SOLVE through the phone door (endpoints exist).

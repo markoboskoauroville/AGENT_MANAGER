@@ -12,3 +12,5 @@ A Mac app (Swift, in the star, group Claude): one window with a table per machin
 First row: ON OFF, name, TOP, X (MANTRA_MANIFEST modules/swift-apps.md). Compiled only by GitHub Actions (`.github/workflows/build.yml`); the Mac downloads the release and signs it "Mantra Apps". No secrets here: hostnames only.
 
 **OPEN MANTRA OPERATING SYSTEM** (top, AX id `openos`, v15): runs `mantra-master open` (helper/mantra_master.py): writes the hand-over `~/.mantra-os/master/STATE.md`, then opens a fresh Master session (Session Manager) in a new iTerm window on the MacBook screen, which loads the skill `master-session`, labels itself "Master" and re-arms its monitor. `mantra-master handoff` writes only the state; `whoami`, `monitor`, `cron`, `carry` serve the new master.
+
+**WHAT STOPPED ME** (column right of the main interface, v16): one orange card per open blocker, newest first, with SOLVE / SEND / DONE. Fed by `mantra-block add|done|list|solve` (helper/mantra_block.py, linked as ~/.local/bin/mantra-block; store ~/.mantra-os/blockers.jsonl) plus a SecurityAgent window and plan tasks with status "blocked". Phone door: `GET /blockers`, `POST /blocker/solve|done`.

@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 15
+let VERSION = 16
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -18,6 +18,7 @@ enum Ink {
     static let grey = Color(red: 0.52, green: 0.52, blue: 0.56)
     static let green = Color(red: 0.30, green: 0.85, blue: 0.45)
     static let amber = Color(red: 0.91, green: 0.64, blue: 0.24)
+    static let orange = Color(red: 1.0, green: 0.55, blue: 0.10)
     static let red = Color(red: 0.95, green: 0.35, blue: 0.33)
 }
 
@@ -112,6 +113,37 @@ final class Model: ObservableObject {
         let j: J = ["id": "\(ms)", "agent": "", "task": 0, "action": "retire", "session": name, "device": device, "kind": kind, "text": "", "at": f.string(from: Date()), "state": "sent", "result": ""]
         if let d = try? JSONSerialization.data(withJSONObject: j, options: [.prettyPrinted]) { try? d.write(to: URL(fileURLWithPath: "\(dir)/\(ms).json"), options: .atomic) }
         refresh()
+    }
+    // ---- WHAT STOPPED ME (v16): the helper mantra_block.py (bundled; the command mantra-block is the same file)
+    @Published var answers: [String: String] = [:]
+    @Published var blockNote = ""
+    static func blockTool() -> String {
+        if let u = Bundle.main.url(forResource: "mantra_block", withExtension: "py") { return u.path }
+        return NSString(string: "~/Developer/AGENT_MANAGER/helper/mantra_block.py").expandingTildeInPath
+    }
+    func block(_ args: [String], note: String = "", then: (() -> Void)? = nil) {
+        let tool = Model.blockTool()
+        DispatchQueue.global().async {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/python3"); p.arguments = ["-I", tool] + args
+            let out = Pipe(); p.standardOutput = out; p.standardError = out
+            var text = ""
+            do { try p.run(); p.waitUntilExit(); text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "" } catch { text = "mantra-block did not start" }
+            let last = text.split(separator: "\n").last.map(String.init) ?? ""
+            DispatchQueue.main.async { self.blockNote = note.isEmpty ? last : note + ": " + last; then?(); self.refresh() }
+        }
+    }
+    func solveBlocker(_ id: String) { block(["solve", id], note: "SOLVE") }
+    func doneBlocker(_ id: String) { block(["done", id]) }
+    /// a question: the answer goes back to the master as a message command, then the blocker is closed with the answer on record
+    func answerBlocker(_ b: J) {
+        let id = b["id"] as? String ?? ""
+        let text = (answers[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty || text.isEmpty { return }
+        let slug = (b["plan"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (((data["retire"] as? J)?["master_slug"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "master")
+        send(slug: slug, agent: b["who"] as? String ?? "", task: b["task"] as? Int ?? 0, action: "message", text: "Marko's answer to what stopped you (\(b["text"] as? String ?? "")): " + text)
+        answers[id] = ""
+        if id.hasPrefix("auto-") { return }
+        block(["done", id, "--answer", text])
     }
     func toggleSolo(_ k: String) { solo = solo == k ? "" : k }
     /// OPEN MANTRA OPERATING SYSTEM (v15): runs `mantra-master open`: the hand-over (~/.mantra-os/master/STATE.md) is written,
@@ -949,6 +981,74 @@ struct StatusBar: View {
     }
 }
 
+// ---------------------------------------------------------------- WHAT STOPPED ME (v16): the column next to the main interface
+func kindIcon(_ k: String) -> String {
+    switch k {
+    case "keychain": return "key.fill"; case "captcha": return "checkmark.shield.fill"; case "hand-test": return "hand.tap.fill"
+    case "decision": return "arrow.triangle.branch"; case "question": return "bubble.left.fill"; case "device": return "iphone"
+    case "login": return "person.crop.circle.fill"; default: return "exclamationmark.triangle.fill"
+    }
+}
+func blockAge(_ s: Int) -> String { s < 90 ? "\(s) sec" : (s < 5400 ? "\(s / 60) min" : (s < 172800 ? "\(s / 3600) h" : "\(s / 86400) d")) }
+
+struct BlockerCard: View {
+    @ObservedObject var m: Model
+    let b: J
+    var body: some View {
+        let id = b["id"] as? String ?? "", kind = b["kind"] as? String ?? "question"
+        let hasSolve = !((b["solve"] as? String) ?? "").isEmpty || !((b["url"] as? String) ?? "").isEmpty
+        let task = b["task"] as? Int ?? 0
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: kindIcon(kind)).foregroundStyle(Ink.orange).font(.system(size: 13))
+                Text(kind.uppercased()).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange)
+                Spacer(minLength: 0)
+                mono(blockAge(b["age"] as? Int ?? 0), Ink.orange, 11)
+            }
+            Text(b["text"] as? String ?? "").font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
+            mono((task > 0 ? "task \(task) · " : "") + (b["who"] as? String ?? ""), Ink.dim, 10.5)
+            if kind == "question" {
+                TextField("your answer", text: Binding(get: { m.answers[id] ?? "" }, set: { m.answers[id] = $0 }))
+                    .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced)).padding(6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.35)))
+                    .accessibilityIdentifier("answer-" + id)
+            }
+            HStack(spacing: 8) {
+                if hasSolve { pill("SOLVE", Ink.orange, "solve-" + id) { m.solveBlocker(id) } }
+                if kind == "question" { pill("SEND", Ink.orange, "send-" + id) { m.answerBlocker(b) } }
+                if !id.hasPrefix("auto-") { pill("DONE", Ink.grey, "done-" + id) { m.doneBlocker(id) } }
+            }
+        }
+        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Ink.orange.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.orange.opacity(0.6), lineWidth: 1))
+    }
+    func pill(_ t: String, _ c: Color, _ id: String, _ a: @escaping () -> Void) -> some View {
+        Text(t).font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(c == Ink.orange ? Ink.ground : Ink.ground)
+            .padding(.horizontal, 12).padding(.vertical, 5).background(RoundedRectangle(cornerRadius: 6).fill(c))
+            .contentShape(Rectangle()).onTapGesture(perform: a).axButton(t, id: id, a)
+    }
+}
+
+struct BlockerColumn: View {
+    @ObservedObject var m: Model
+    var body: some View {
+        let bs = ((m.data["blockers"] as? [J]) ?? []).sorted { ($0["age"] as? Int ?? 0) < ($1["age"] as? Int ?? 0) }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("WHAT STOPPED ME").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange)
+                .accessibilityIdentifier("blockers-title")
+            if !m.blockNote.isEmpty { mono(m.blockNote, Ink.dim, 10.5) }
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if bs.isEmpty { mono("Nothing is waiting for you", Ink.green, 12) }
+                    ForEach(Array(bs.enumerated()), id: \.offset) { _, b in BlockerCard(m: m, b: b) }
+                }
+            }
+        }
+        .padding(12).frame(width: 300).background(Ink.panel.opacity(0.6))
+    }
+}
+
 struct Root: View {
     @ObservedObject var m: Model
     let margin: CGFloat = 16
@@ -960,6 +1060,7 @@ struct Root: View {
     var body: some View {
         VStack(spacing: 0) {
             TopRow().padding(.horizontal, 12).padding(.top, 6)
+            HStack(spacing: 0) {
             GeometryReader { g in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 12) {
@@ -997,11 +1098,14 @@ struct Root: View {
                     .padding(margin)
                 }
             }
+            Rectangle().fill(Ink.line).frame(width: 1)
+            BlockerColumn(m: m)
+            }
             StatusBar(data: m.data)
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(Ink.ground)
-        .frame(minWidth: 620, idealWidth: 760, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
+        .frame(minWidth: 920, idealWidth: 1060, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
         .environment(\.colorScheme, .dark)
     }
 }
@@ -1019,9 +1123,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         let args = CommandLine.arguments
         let host = NSHostingView(rootView: Root(m: model))
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1060, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = ""; window.identifier = NSUserInterfaceItemIdentifier("agentmanager"); window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
-        window.contentView = host; window.minSize = NSSize(width: 620, height: 480); window.isReleasedWhenClosed = false
+        window.contentView = host; window.minSize = NSSize(width: 920, height: 480); window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("AgentManagerWindow"); window.backgroundColor = NSColor(Ink.ground)
         // --shot <png>: drawn off screen at the minimum size (sample data, no network, nothing stored); --shot-live: the real data once
         if let i = args.firstIndex(where: { $0 == "--shot" || $0 == "--shot-live" }), i + 1 < args.count {
@@ -1030,7 +1134,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if let mac = model.data["mac"] as? J, let pl = mac["plans"] { model.data["plans"] = pl }   // the sample keeps its plan inside "mac"
             model.stamp = (model.data["time"] as? String) ?? "?"
             if let k = args.firstIndex(of: "--solo"), k + 1 < args.count { model.solo = args[k + 1] }
-            var width: CGFloat = 620
+            var width: CGFloat = 920
             if let k = args.firstIndex(of: "--width"), k + 1 < args.count, let w = Double(args[k + 1]) { width = CGFloat(w) }
             window.setFrame(NSRect(x: -4000, y: -4000, width: width, height: 900), display: false)
             host.frame = NSRect(x: 0, y: 0, width: width, height: 900); host.layoutSubtreeIfNeeded()

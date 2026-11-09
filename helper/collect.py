@@ -310,6 +310,16 @@ def plans():
     return out
 
 
+def blockers():
+    """open blockers (mantra_block.py list --json --all): records, a SecurityAgent window, plan tasks with status blocked"""
+    try:
+        r = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "mantra_block.py"), "list", "--json", "--all"],
+                           capture_output=True, text=True, timeout=12)
+        return json.loads(r.stdout)
+    except Exception:
+        return []
+
+
 TS_CLI = next((p for p in ("/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale") if os.path.exists(p)), "tailscale")
 
 
@@ -446,6 +456,7 @@ def main():
     if "--no-labels" not in sys.argv and "--text" not in sys.argv:
         start_labeler()
     res["retire"] = retire()
+    res["blockers"] = blockers()
     res["sessions_all"] = merge_sessions(res)
     res["time"] = time.strftime("%H:%M:%S")
     if "--text" in sys.argv:

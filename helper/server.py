@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agent Manager (CEO) (Mantra): the phone door. A tiny HTTP API bound ONLY to this Mac's Tailscale address (100.x),
 never 0.0.0.0, never the LAN. Token in ~/Downloads/API/agent-manager-token.txt (created here if missing, never printed).
-  GET  /overview   the collect.py JSON      GET /plans   the plans    POST /command   one command file, as the Mac app writes it
+  GET  /overview   the collect.py JSON      GET /plans   the plans   GET /blockers   POST /blocker/solve|done {id}    POST /command   one command file, as the Mac app writes it
 Started and stopped by the app (one app owns its engine). Port 8847."""
 import hmac, json, os, re, secrets, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -79,6 +79,11 @@ def write_command(b):
     os.rename(p + ".tmp", p)
     return 200, {"ok": True, "id": j["id"], "slug": slug}
 
+def block(*args):
+    """mantra_block.py next to this file: list | solve <id> | done <id>"""
+    r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "mantra_block.py")] + list(args), capture_output=True, text=True, timeout=130)
+    return r.returncode, (r.stdout + r.stderr).strip()[-300:]
+
 class H(BaseHTTPRequestHandler):
     server_version = "AgentManager"
     def log_message(self, *a): pass
@@ -96,10 +101,22 @@ class H(BaseHTTPRequestHandler):
         if not self._auth(): return
         if path == "/overview": return self._send(200, overview())
         if path == "/plans": return self._send(200, plans())
+        if path == "/blockers":
+            rc, o = block("list", "--json", "--all")
+            try: return self._send(200, json.loads(o))
+            except Exception: return self._send(500, {"error": "blockers"})
         self._send(404, {"error": "not found"})
     def do_POST(self):
         if not self._auth(): return
-        if self.path.split("?")[0] != "/command": return self._send(404, {"error": "not found"})
+        pth = self.path.split("?")[0]
+        if pth in ("/blocker/solve", "/blocker/done"):
+            try: b = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", "0")), 4000)) or b"{}")
+            except Exception: return self._send(400, {"error": "bad json"})
+            bid = str(b.get("id", ""))
+            if not re.match(r"^[A-Za-z0-9_.-]{1,120}$", bid): return self._send(400, {"error": "bad id"})
+            rc, o = block(pth.split("/")[2], bid)
+            return self._send(200 if rc == 0 else 500, {"ok": rc == 0, "result": o})
+        if pth != "/command": return self._send(404, {"error": "not found"})
         try:
             n = int(self.headers.get("Content-Length", "0"))
             if n > 20000: return self._send(413, {"error": "too large"})

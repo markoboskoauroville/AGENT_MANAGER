@@ -8,7 +8,7 @@ APP="build/Agent Manager (Mantra).app"
 rm -rf build; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -swift-version 5 -o "$APP/Contents/MacOS/AgentManager" app/*.swift -framework AppKit -framework SwiftUI
 cp helper/collect.py "$APP/Contents/Resources/collect.py"; cp helper/server.py "$APP/Contents/Resources/server.py"
-cp master-prompt.txt "$APP/Contents/Resources/master-prompt.txt"; cp helper/ceo_labels.py "$APP/Contents/Resources/ceo_labels.py"; cp helper/mantra_master.py "$APP/Contents/Resources/mantra_master.py"; cp retire-prompt.txt "$APP/Contents/Resources/retire-prompt.txt"
+cp master-prompt.txt "$APP/Contents/Resources/master-prompt.txt"; cp helper/ceo_labels.py "$APP/Contents/Resources/ceo_labels.py"; cp helper/mantra_master.py "$APP/Contents/Resources/mantra_master.py"; cp helper/mantra_block.py "$APP/Contents/Resources/mantra_block.py"; cp retire-prompt.txt "$APP/Contents/Resources/retire-prompt.txt"
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
