@@ -932,7 +932,7 @@ struct BlockerCard: View {
     let b: J
     var body: some View {
         let id = b["id"] as? String ?? "", kind = b["kind"] as? String ?? "question"
-        let hasSolve = !((b["solve"] as? String) ?? "").isEmpty || !((b["url"] as? String) ?? "").isEmpty
+        let hasSolve = ["solve", "url", "where"].contains { !((b[$0] as? String) ?? "").isEmpty }
         let task = b["task"] as? Int ?? 0
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -943,15 +943,9 @@ struct BlockerCard: View {
             }
             Text(b["text"] as? String ?? "").font(.system(size: 12, design: .monospaced)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
             mono((task > 0 ? "task \(task) · " : "") + (b["who"] as? String ?? ""), Ink.dim, 10.5)
-            if kind == "question" {
-                TextField("your answer", text: Binding(get: { m.answers[id] ?? "" }, set: { m.answers[id] = $0 }))
-                    .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced)).padding(6)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.35)))
-                    .accessibilityIdentifier("answer-" + id)
-            }
+            if let h = b["hint"] as? String, !h.isEmpty { Text(h).font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.orange).fixedSize(horizontal: false, vertical: true) }
             HStack(spacing: 8) {
                 if hasSolve { pill("SOLVE", Ink.orange, "solve-" + id) { m.solveBlocker(id) } }
-                if kind == "question" { pill("SEND", Ink.orange, "send-" + id) { m.answerBlocker(b) } }
                 if !id.hasPrefix("auto-") { pill("DONE", Ink.grey, "done-" + id) { m.doneBlocker(id) } }
             }
         }
@@ -1143,13 +1137,15 @@ struct Root: View {
                     .padding(margin)
                 }
             }
-            Rectangle().fill(Ink.line).frame(width: 1)
-            BlockerColumn(m: m)
+            if !(((m.data["blockers"] as? [J]) ?? []).isEmpty) {
+                Rectangle().fill(Ink.line).frame(width: 1)
+                BlockerColumn(m: m)
+            }
             }
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(Ink.ground)
-        .frame(minWidth: 1180, idealWidth: 1320, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
+        .frame(minWidth: 900, idealWidth: 1320, maxWidth: .infinity, minHeight: 480, idealHeight: 820, maxHeight: .infinity)
         .environment(\.colorScheme, .dark)
     }
 }
@@ -1169,7 +1165,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let host = NSHostingView(rootView: Root(m: model))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1320, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = ""; window.identifier = NSUserInterfaceItemIdentifier("agentmanager"); window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
-        window.contentView = host; window.minSize = NSSize(width: 1180, height: 480); window.isReleasedWhenClosed = false
+        window.contentView = host; window.minSize = NSSize(width: 900, height: 480); window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("AgentManagerWindow"); window.backgroundColor = NSColor(Ink.ground)
         // --shot <png>: drawn off screen at the minimum size (sample data, no network, nothing stored); --shot-live: the real data once
         if let i = args.firstIndex(where: { $0 == "--shot" || $0 == "--shot-live" }), i + 1 < args.count {
@@ -1177,6 +1173,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             else { model.data = try! JSONSerialization.jsonObject(with: Data(sampleJSON.utf8)) as! J }
             if let mac = model.data["mac"] as? J, let pl = mac["plans"] { model.data["plans"] = pl }   // the sample keeps its plan inside "mac"
             model.stamp = (model.data["time"] as? String) ?? "?"
+            if args.contains("--fake-blockers") { model.data["blockers"] = [["id": "x1", "kind": "keychain", "text": "A macOS password prompt is on screen.", "who": "macOS", "task": 0, "age": 720, "where": "app:SecurityAgent", "hint": "Type your login password and press Always Allow."] as J, ["id": "x2", "kind": "question", "text": "Which voice should I use?", "who": "suno-chakra", "task": 38, "age": 90, "where": "session:Master", "hint": "Answer in that session."] as J] }
             if let k = args.firstIndex(of: "--solo"), k + 1 < args.count { model.solo = args[k + 1] }
             var width: CGFloat = 1180
             if let k = args.firstIndex(of: "--width"), k + 1 < args.count, let w = Double(args[k + 1]) { width = CGFloat(w) }

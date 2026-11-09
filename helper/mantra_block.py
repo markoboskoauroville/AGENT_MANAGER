@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mantra-block: what stopped a worker or the master on something only Marko can do (Agent Manager v16, 9.11.2026).
   mantra-block add --task <n> --who "<worker>" --kind keychain|captcha|hand-test|decision|question|device|login
-                   --text "<one line: what Marko must do>" [--solve "<shell command that presents it again>"] [--url <link>] [--plan <slug>]
+                   --text "<one line: what Marko must do>" --where "<app:Name[|window title] | url:<link> | session:<sid or name> | phone[:serial]>" --hint "<one sentence: what to do there>" [--solve "<extra shell command>"] [--url <link>] [--plan <slug>]
   mantra-block done <id> [--answer "..."]     mantra-block list [--json] [--all]     mantra-block solve <id>
 Store: ~/.mantra-os/blockers.jsonl (append only, the last line per id wins). The plan task is mirrored: status "blocked" + "blocker": <id>;
 done puts the old status back. `list --json --all` adds what is found by itself: a SecurityAgent window (keychain) and plan tasks
@@ -50,7 +50,7 @@ def cmd_add(a):
     if a.kind not in KINDS: sys.exit("kind must be one of " + ", ".join(KINDS))
     bid = "b" + format(int(time.time() * 1000), "x")
     r = {"id": bid, "state": "open", "at": time.time(), "iso": now_iso(), "task": a.task, "who": a.who, "kind": a.kind,
-         "text": a.text, "solve": a.solve or "", "url": a.url or "", "plan": ""}
+         "text": a.text, "solve": a.solve or "", "url": a.url or "", "where": a.where or "", "hint": a.hint or "", "plan": ""}
     def mark(t):
         if t.get("status") != "blocked": t["prev"] = t.get("status", "running")
         t["status"] = "blocked"; t["blocker"] = bid
@@ -90,7 +90,7 @@ def open_list(auto):
         if security_agent():
             out.append({"id": "auto-keychain", "state": "open", "at": time.time() - 30, "task": 0, "who": "macOS", "kind": "keychain", "auto": True,
                         "text": "A macOS password prompt (SecurityAgent, e.g. Chrome Safe Storage) is on screen: only you can answer it.",
-                        "solve": "osascript -e 'tell application \"SecurityAgent\" to activate'", "url": ""})
+                        "where": "app:SecurityAgent", "hint": "Type your login password and press Always Allow.", "solve": "", "url": ""})
         have = {(r.get("plan"), r.get("task")) for r in out}
         for f in plan_files()[:12]:
             try: p = json.load(open(f))
@@ -100,7 +100,8 @@ def open_list(auto):
                 if t.get("status") == "blocked" and (slug, t.get("n")) not in have and not any(r.get("task") == t.get("n") and not r.get("plan") for r in out):
                     out.append({"id": "plan-%s-%s" % (slug, t.get("n")), "state": "open", "at": os.path.getmtime(f), "task": t.get("n"), "plan": slug,
                                 "who": t.get("worker") or t.get("agent") or "plan", "kind": "question", "auto": True,
-                                "text": t.get("next") or t.get("title") or "blocked", "solve": "", "url": ""})
+                                "text": t.get("next") or t.get("title") or "blocked", "solve": "", "url": "",
+                                "where": ("session:" + p["session"]) if p.get("session") else "", "hint": "Answer in that session."})
     out.sort(key=lambda r: r.get("at", 0), reverse=True)
     for r in out: r["age"] = max(0, int(time.time() - r.get("at", time.time())))
     return out
@@ -112,20 +113,55 @@ def cmd_list(a):
     for r in rs:
         print("%-14s %-9s task %-3s %-14s %4d min  %s" % (r["id"], r["kind"], r.get("task") or "-", (r.get("who") or "")[:14], r["age"] // 60, r["text"]))
 
+def sh(cmd, t=40):
+    return subprocess.run(["/bin/zsh", "-lc", cmd], capture_output=True, text=True, timeout=t)
+
+def sid_for(name):
+    """the session id of a Mac session whose name contains `name` (collect.py, no labeler)"""
+    if len(name) == 36 and name.count("-") == 4: return name
+    try:
+        d = json.loads(subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "collect.py"), "--no-labels"],
+                                      capture_output=True, text=True, timeout=40).stdout)
+        for s in d["mac"]["sessions"]:
+            if name.lower() in (s.get("name") or "").lower() or name.lower() == (s.get("base") or "").lower(): return s.get("sid")
+    except Exception: pass
+    return None
+
+def present(r):
+    """bring the real place to the front, where Marko acts; the hint is spoken. Never the BenQ: windows are moved to the MacBook screen."""
+    w = r.get("where") or ""; kind, _, arg = w.partition(":"); out = []
+    if kind == "app":
+        name, _, title = arg.partition("|")
+        sh("open -a %s" % json.dumps(name)); time.sleep(0.6)
+        if name != "SecurityAgent":
+            sh('macro win-snap %s center MacBook' % json.dumps(title or name)); out.append("window moved to the MacBook screen")
+            sh('macro win-top %s' % json.dumps(title or name))
+        out.append("front: " + name)
+    elif kind == "url":
+        sh("open %s" % json.dumps(arg)); out.append("opened " + arg)
+    elif kind == "session":
+        sid = sid_for(arg)
+        p = sh("python3 ~/Developer/claude-code/tools/other_sessions.py front %s" % sid) if sid else None
+        out.append("session tab in front" if p and p.returncode == 0 else "session tab not found: " + arg)
+    elif kind == "phone":
+        sh("pgrep -x scrcpy >/dev/null || (scrcpy %s >/dev/null 2>&1 &)" % (("-s " + arg) if arg else "")); time.sleep(1.5)
+        sh('macro win-snap scrcpy center MacBook; macro win-top scrcpy'); out.append("phone screen in front")
+    if r.get("url") and kind != "url": sh("open %s" % json.dumps(r["url"]))
+    if r.get("solve"):
+        p = sh(r["solve"], 120); out.append((p.stdout + p.stderr).strip()[-200:] or "solve ran")
+    if r.get("hint"):
+        subprocess.Popen(["/bin/zsh", "-lc", "langsay en %s" % json.dumps(r["hint"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return "; ".join(x for x in out if x) or "nothing to present: " + r["text"]
+
 def cmd_solve(a):
     r = next((x for x in open_list(True) if x["id"] == a.id), None)
     if not r: sys.exit("no open blocker " + a.id)
-    if r.get("solve"):
-        p = subprocess.run(["/bin/zsh", "-lc", r["solve"]], capture_output=True, text=True, timeout=120)
-        print((p.stdout + p.stderr).strip()[-300:] or "solve ran"); sys.exit(0 if p.returncode == 0 else 1)
-    if r.get("url"):
-        subprocess.run(["/usr/bin/open", r["url"]]); print("opened " + r["url"]); return
-    print("nothing to present: " + r["text"])
+    print(present(r))
 
 def main():
     ap = argparse.ArgumentParser(prog="mantra-block"); sub = ap.add_subparsers(dest="c", required=True)
     s = sub.add_parser("add"); s.add_argument("--task", type=int, default=0); s.add_argument("--who", default="")
-    s.add_argument("--kind", required=True); s.add_argument("--text", required=True); s.add_argument("--solve"); s.add_argument("--url"); s.add_argument("--plan"); s.set_defaults(f=cmd_add)
+    s.add_argument("--kind", required=True); s.add_argument("--text", required=True); s.add_argument("--solve"); s.add_argument("--url"); s.add_argument("--plan"); s.add_argument("--where"); s.add_argument("--hint"); s.set_defaults(f=cmd_add)
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--answer"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("list"); s.add_argument("--json", action="store_true"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_list)
     s = sub.add_parser("solve"); s.add_argument("id"); s.set_defaults(f=cmd_solve)
