@@ -34,7 +34,11 @@ def token():
     with os.fdopen(fd, "w") as f: f.write(t + "\n")
     return t
 
-TOK = token()
+token()  # makes sure the file exists; every request re-reads it, so a rotation needs no restart
+
+def current():
+    try: return open(TOKEN_FILE).read().strip()
+    except OSError: return ""
 _lock = threading.Lock(); _cache = {"at": 0.0, "data": None}
 
 def overview():
@@ -84,7 +88,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
     def _auth(self):
         got = self.headers.get("Authorization", "")
-        if got.startswith("Bearer ") and hmac.compare_digest(got[7:].strip(), TOK): return True
+        if got.startswith("Bearer ") and current() and hmac.compare_digest(got[7:].strip().encode(), current().encode()): return True
         self._send(401, {"error": "token"}); return False
     def do_GET(self):
         path = self.path.split("?")[0]
