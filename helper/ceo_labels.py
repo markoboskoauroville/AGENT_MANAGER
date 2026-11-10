@@ -32,7 +32,13 @@ def log(sid, base, old, new, by):
         f.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "session": base, "sid": sid, "from": old, "to": new, "by": by}) + "\n")
 
 
+def is_master(sid):   # 10.11.2026: a Master keeps "Master"; no auto label ever touches it (helper/master_mark.py)
+    return os.path.exists(f"{TOPIC}/{sid}.master")
+
+
 def apply(sid, text):
+    if is_master(sid) and text != "Master":
+        return
     os.makedirs(TOPIC, exist_ok=True)
     open(f"{TOPIC}/{sid}", "w").write(text + "\n")
     open(f"{TOPIC}/{sid}.ceo", "w").write("ceo\n")
@@ -101,7 +107,7 @@ def run():
             if not sid or not base:
                 continue
             st = jread(f"{LAB}/{sid}.json")
-            if st.get("by") == "manual":
+            if st.get("by") == "manual" or is_master(sid):
                 continue
             focus, ps = focus_task(base), last_prompts(s)
             h = hashlib.sha1((focus + "|" + (ps[-1] if ps else "")).encode()).hexdigest()[:12]
@@ -130,6 +136,8 @@ if __name__ == "__main__":
         apply(sid, text)
         log(sid, st.get("base", ""), st.get("label"), text, "manual")
         json.dump({"label": text, "hash": "", "ts": time.time(), "by": "manual", "base": st.get("base", ""), "at": time.strftime("%H:%M:%S")}, open(f"{LAB}/{sid}.json", "w"))
+    elif a[:1] == ["auto"] and len(a) >= 2 and is_master(a[1]):
+        pass   # the Master stays Master
     elif a[:1] == ["auto"] and len(a) >= 2:
         st = jread(f"{LAB}/{a[1]}.json")
         st.update({"by": "ceo", "hash": "", "ts": 0})

@@ -274,6 +274,9 @@ def open_master(plan_arg=None, dry=False):
     try:   # the label is written before the session starts; its first prompt turns it into "<BASE> (Master)"
         if not dry:
             subprocess.run(["/usr/bin/python3", LABELS, "set", sid, "Master"], capture_output=True, timeout=10)
+            sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+            import master_mark   # 10.11.2026: the button's session is the Master (registry + marker)
+            master_mark.register(sid)
     except Exception:
         pass
     title = next_ses_name() + " (Master)"
@@ -337,6 +340,9 @@ def main():
     elif cmd == "whoami":
         sid, name = whoami()
         print(f"{sid} {name}".strip() or "not inside a Claude Code session")
+        c = jread(MASTER + "/current")
+        if c.get("sid"):
+            print(f"master: {c.get('base') or '?'} {c['sid']}" + (" (this session)" if c["sid"] == sid else ""))
     elif cmd == "monitor":
         print(monitor_cmd(slug(base(whoami()[1])) or "master"))
     elif cmd == "cron":
