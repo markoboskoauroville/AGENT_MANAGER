@@ -81,7 +81,14 @@ def settings_facts():
     return {"model": st.get("model"), "rc_at_startup": st.get("remoteControlAtStartup"),
             "router_plugin": ep.get("mantra-router@mantra-router"), "fast_mode": st.get("fastMode"),
             "effort_default": ((st.get("modelSettings") or {}).get("claude-fable-5") or {}).get("effortLevel") or st.get("effortLevel"),
-            "usage": jread(HOME + "/.cache/claude-usage.json")}
+            "usage": jread(HOME + "/.cache/claude-usage.json"), "api_money": api_money()}
+
+
+def api_money():
+    """task 80: the $100 API credit, local estimate (helper/api_money.py writes ~/.cache/claude-api-money.json)"""
+    rc, o = run(["/usr/bin/python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_money.py"), "status"], 15)
+    try: return json.loads(o)
+    except Exception: return jread(HOME + "/.cache/claude-api-money.json")
 
 
 def mcp_names(cwd):

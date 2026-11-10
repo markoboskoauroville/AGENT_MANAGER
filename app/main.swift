@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 22
+let VERSION = 23
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -1016,6 +1016,27 @@ struct UsageFigure: View {
     }
 }
 
+/// task 80 (10.11.2026): the monthly $100 API credit of Max, ESTIMATE from the claude-api-mode ledger
+/// (the real balance is only on platform.claude.com/settings/billing; the cost API needs an admin key)
+struct ApiMoneyLine: View {
+    let m: J
+    func usd(_ k: String) -> String { (m[k] as? Double).map { String(format: "$%.2f", $0) } ?? "–" }
+    var body: some View {
+        let left = m["left"] as? Double ?? 100, on = m["mode_on"] as? Bool ?? false
+        let days = (m["days_left"] as? Double).map { String(format: "%.1f days at this rate", $0) } ?? "no API use yet"
+        let eq = (m["max_equiv_per_day"] as? Double).map { String(format: "your Max use would cost $%.0f/day on the API", $0) } ?? ""
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("API $100").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Ink.dim)
+            Text(String(format: "$%.2f left", left)).font(.system(size: 18, weight: .bold, design: .monospaced))
+                .foregroundStyle(left < 20 ? Ink.red : (left < 50 ? Ink.amber : Ink.green))
+            Text("today \(usd("today")) · \(days) · \(on ? "API MODE ON" : "api mode off") · estimate · \(eq)")
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(Ink.dim).fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore).accessibilityIdentifier("apimoney")
+        .accessibilityLabel("API credit estimate").accessibilityValue(String(format: "$%.2f left", left))
+    }
+}
+
 struct UsageHeader: View {
     let data: J
     var body: some View {
@@ -1028,6 +1049,7 @@ struct UsageHeader: View {
                 UsageFigure(label: "SESSION (5 h)", p: fp, reset: resetsIn(f?["resets_at"] as? Double), color: usageColor(fp))
                 UsageFigure(label: "WEEK", p: wp, reset: resetsIn(w?["resets_at"] as? Double), color: Color(red: 1.0, green: 0.55, blue: 0.1))
             }
+            ApiMoneyLine(m: (st["api_money"] as? J) ?? [:])
             strip([lab("model", st["model"] as? String), lab("effort", st["effort_default"] as? String),
                    lab("RC@start", (st["rc_at_startup"] as? Bool).map { $0 ? "on" : "off" }, Ink.green),
                    lab("router", (st["router_plugin"] as? Bool).map { $0 ? "plugin on" : "plugin off" }),
