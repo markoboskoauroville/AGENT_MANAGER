@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 23
+let VERSION = 24
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
