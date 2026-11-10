@@ -76,6 +76,38 @@ def ledger():
     except FileNotFoundError: pass
     return rows
 
+ASK = HOME + "/.cache/claude-api-ask.json"   # which usage window was already asked about (once per window)
+QUESTION = ("Marko, your Claude plan usage is at {p} percent of the {w}. Do you want to switch to the API? "
+            "The included hundred dollars covers only headless jobs, not this chat, and at your pace it lasts about half a day. "
+            "Press SOLVE on the card in the CEO, or tell the master yes.")
+
+def watch():
+    """task 80: at 99 % of the 5-hour or the weekly limit ask Marko ONCE per window: a decision card in WHAT STOPPED ME
+    (SOLVE = his yes = claude-api-mode on) and the question spoken on the Nothing Phone (phonesay). Never switches by itself."""
+    try: rl = json.load(open(HOME + "/.cache/claude-usage.json")).get("rate_limits") or {}
+    except Exception: return None
+    for k, name in (("seven_day", "week"), ("five_hour", "five hour window")):
+        w = rl.get(k) or {}
+        p = w.get("used_percentage")
+        if p is None or p < 99: continue
+        if os.path.exists(HOME + "/.cache/claude-api-mode.on"): return None
+        try: asked = json.load(open(ASK))
+        except Exception: asked = {}
+        tag = "%s:%s" % (k, w.get("resets_at"))
+        if asked.get(tag): return tag
+        asked[tag] = time.time(); json.dump(asked, open(ASK, "w"))
+        import subprocess
+        bl = HOME + "/.local/bin/"
+        subprocess.Popen([bl + "mantra-block", "add", "--task", "80", "--who", "usage watcher", "--kind", "decision",
+                          "--text", "Plan usage %s%% of the %s: switch to the API $100 credit?" % (p, name),
+                          "--where", "session:master", "--hint", "SOLVE = yes, turns claude-api-mode on (headless jobs only). Ignore = stay on Max.",
+                          "--solve", bl + "claude-api-mode on", "--check", "test -e " + HOME + "/.cache/claude-api-mode.on"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen([bl + "phonesay", QUESTION.format(p=p, w=name), "en"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return tag
+    return None
+
 def status():
     rows = ledger()
     today = datetime.date.today().isoformat()
@@ -84,6 +116,7 @@ def status():
     first = min((r["ts"] for r in rows if r.get("ts")), default=None)
     d = max(1.0, (time.time() - datetime.datetime.fromisoformat(first).timestamp()) / 86400) if first else None
     rate = spent / d if d else None
+    asked = watch()
     on = os.path.exists(HOME + "/.cache/claude-api-mode.on")
     # what the last 7 days of Claude Code (Max login) would cost on the API: cached 10 min, takes ~3 s
     eq = None
@@ -97,7 +130,7 @@ def status():
          "today": round(spent_today, 2), "per_day": round(rate, 2) if rate else None,
          "days_left": round((CREDIT - spent) / rate, 1) if rate else None, "runs": len(rows), "mode_on": on,
          "updated": time.strftime("%H:%M:%S"),
-         "max_equiv_per_day": eq[0], "eq_at": eq[1],
+         "max_equiv_per_day": eq[0], "eq_at": eq[1], "asked": asked,
          "note": "estimate from local run costs; real balance: platform.claude.com/settings/billing"}
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     json.dump(o, open(OUT + ".tmp", "w")); os.replace(OUT + ".tmp", OUT)
