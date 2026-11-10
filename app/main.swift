@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 25
+let VERSION = 26
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -22,9 +22,28 @@ enum Ink {
     static let red = Color(red: 0.95, green: 0.35, blue: 0.33)
 }
 
+// Hover highlight (MANTRA_MANIFEST modules/workflow-interface.md, "Pressable controls highlight"): one modifier, every pressable control.
+struct PressHover: ViewModifier {
+    @Environment(\.isEnabled) private var enabled
+    @State private var hot = false
+    var forced = false   // for off-screen renders: simulated hover
+    func body(content: Content) -> some View {
+        let on = (hot || forced) && enabled
+        content
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(on ? 0.12 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.white.opacity(on ? 0.55 : 0), lineWidth: 1))
+            .animation(.easeOut(duration: 0.12), value: on)
+            .onHover { inside in
+                hot = inside
+                if enabled { if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+            }
+    }
+}
+
 extension View {
+    func pressHover() -> some View { modifier(PressHover()) }
     func axButton(_ label: String, id: String, value: String? = nil, _ action: @escaping () -> Void) -> some View {
-        accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityIdentifier(id)
+        pressHover().accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityIdentifier(id)
             .accessibilityValue(value ?? "").accessibilityAddTraits(.isButton).accessibilityAction(.default, action)
     }
 }
