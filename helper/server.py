@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Agent Manager (CEO) (Mantra): the phone door. A tiny HTTP API bound ONLY to this Mac's Tailscale address (100.x),
 never 0.0.0.0, never the LAN. Token in ~/Downloads/API/agent-manager-token.txt (created here if missing, never printed).
-  GET  /overview   the collect.py JSON      GET /plans   the plans   GET /blockers   POST /blocker/solve|done {id}    POST /command   one command file, as the Mac app writes it
+  GET  /overview   the collect.py JSON      GET /plans   the plans (fresh from the files)   GET /live?since=N   long poll, held up to 20 s until something changes (v22)   GET /blockers   POST /blocker/solve|done {id}    POST /command   one command file, as the Mac app writes it
 Started and stopped by the app (one app owns its engine). Port 8847."""
 import hmac, json, os, re, secrets, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,21 +39,83 @@ token()  # makes sure the file exists; every request re-reads it, so a rotation 
 def current():
     try: return open(TOKEN_FILE).read().strip()
     except OSError: return ""
-_lock = threading.Lock(); _cache = {"at": 0.0, "data": None}
+_lock = threading.Lock(); _cache = {"at": 0.0, "data": None, "hash": ""}
+_cv = threading.Condition(); _ver = {"n": 1, "plansig": ""}
+
+def _jread(p):
+    try: return json.load(open(p))
+    except Exception: return {}
+
+def fresh_plans():
+    """read straight from the files on every call (no 3 s collector wait): ~/.mantra-os/plans + newest commands"""
+    import glob
+    out = []
+    for f in sorted(glob.glob(MOS + "/plans/*.json"), key=os.path.getmtime, reverse=True)[:12]:
+        p = _jread(f)
+        if not p: continue
+        slug = os.path.basename(f)[:-5]
+        p["slug"] = slug; p["age"] = int(time.time() - os.path.getmtime(f))
+        cmds = []
+        for c in sorted(glob.glob("%s/commands/%s/*.json" % (MOS, slug)), key=os.path.getmtime, reverse=True)[:12]:
+            j = _jread(c)
+            if j: cmds.append({k: j.get(k) for k in ("id", "agent", "task", "action", "text", "at", "state", "result")})
+        p["commands"] = cmds
+        out.append(p)
+    return out
+
+def plansig():
+    import glob
+    sig = []
+    for f in glob.glob(MOS + "/plans/*.json") + glob.glob(MOS + "/commands/*/*.json"):
+        try: st = os.stat(f); sig.append((f, st.st_mtime_ns, st.st_size))
+        except OSError: pass
+    return hash(tuple(sorted(sig)))
+
+def _bump():
+    with _cv:
+        _ver["n"] += 1; _cv.notify_all()
+
+def collector_loop():
+    """keeps the heavy overview (sessions, phones, vm, usage) fresh in the background, every ~2 s after the last run ends;
+    watches the plan files every 0.4 s and wakes the live waiters the moment one changes"""
+    last_heavy = 0.0
+    while True:
+        try:
+            sig = plansig()
+            if sig != _ver["plansig"]:
+                _ver["plansig"] = sig; _bump()
+            if time.time() - last_heavy > 2:
+                r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "collect.py"), "--json"], capture_output=True, timeout=45)
+                d = json.loads(r.stdout)
+                h = json.dumps({k: v for k, v in d.items() if k not in ("time", "plans")}, sort_keys=True)
+                with _lock:
+                    changed = h != _cache["hash"]
+                    _cache.update(at=time.time(), data=d, hash=h)
+                if changed: _bump()
+                last_heavy = time.time()
+        except Exception:
+            time.sleep(2)
+        time.sleep(0.4)
 
 def overview():
     with _lock:
-        if _cache["data"] is None or time.time() - _cache["at"] > 4:
-            try:
-                r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "collect.py"), "--json"], capture_output=True, timeout=45)
-                _cache["data"] = json.loads(r.stdout); _cache["at"] = time.time()
-            except Exception as e:
-                if _cache["data"] is None: return {"error": "collect failed: %s" % type(e).__name__}
-        d = dict(_cache["data"]); d["served_at"] = time.strftime("%H:%M:%S")
-        return d
+        d = dict(_cache["data"]) if _cache["data"] else None
+        at = _cache["at"]
+    if d is None: return {"error": "collector starting"}
+    d["plans"] = fresh_plans()
+    d["served_at"] = time.strftime("%H:%M:%S")
+    d["data_age"] = int(time.time() - at)
+    d["ver"] = _ver["n"]
+    return d
+
+def live(since, wait=20):
+    """long poll: answers at once when `since` is not the current version, else holds up to `wait` s for a change"""
+    with _cv:
+        if since == _ver["n"]: _cv.wait(wait)
+    return overview()
 
 def plans():
-    return overview().get("plans", [])
+    return fresh_plans()
 
 def write_command(b):
     action = str(b.get("action", ""))
@@ -97,11 +159,17 @@ class H(BaseHTTPRequestHandler):
         self._send(401, {"error": "token"}); return False
     def do_GET(self):
         path = self.path.split("?")[0]
-        if path == "/ping": return self._send(200, {"ok": True})
+        if path == "/ping": return self._send(200, {"ok": True, "t": time.time()})
         if not self._auth(): return
         if path == "/overview": return self._send(200, overview())
+        if path == "/live":
+            try: since = int(self.path.split("since=")[1].split("&")[0])
+            except Exception: since = -1
+            return self._send(200, live(since))
         if path == "/plans": return self._send(200, plans())
         if path == "/blockers":
+            b = (_cache["data"] or {}).get("blockers")
+            if b is not None: return self._send(200, b)
             rc, o = block("list", "--json", "--all")
             try: return self._send(200, json.loads(o))
             except Exception: return self._send(500, {"error": "blockers"})
@@ -134,6 +202,7 @@ def main():
                 print("bind %s:%d failed: %s" % (ip, PORT, e), file=sys.stderr); sys.exit(1)
         time.sleep(15)
     print("agent-manager door on %s:%d" % (ip, PORT), flush=True)
+    threading.Thread(target=collector_loop, daemon=True).start()
     srv.serve_forever()
 
 if __name__ == "__main__": main()
