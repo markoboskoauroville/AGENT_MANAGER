@@ -6,7 +6,8 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 26
+let VERSION = 27
+let APP_NAME = "Agent Manager (Mantra)"
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
 enum Ink {
@@ -359,9 +360,87 @@ struct Bar: View {
     }
 }
 
+// ---------------------------------------------------------------- task monitor (v27, 14.11.2026): steps, progress, ETA, speed, waiting for, stale
+// Plan task fields (MANTRA_MANIFEST modules/claude-code-mantra-os.md 8a): steps[{title,status todo|running|done|failed}], progress 0-100,
+// eta (ISO) or etaSec (seconds after `updated`), speed, waitingFor, started, updated. Written by `mantra-task`.
+func parseISO(_ s: String?) -> Date? {
+    guard let s = s, !s.isEmpty else { return nil }
+    let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX")
+    for fmt in ["yyyy-MM-dd'T'HH:mm:ssZ", "yyyy-MM-dd'T'HH:mm:ssxxx", "yyyy-MM-dd'T'HH:mm:ss.SSSZ", "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss"] {
+        f.dateFormat = fmt; if let d = f.date(from: s) { return d }
+    }
+    return nil
+}
+func clock(_ sec: Int) -> String {
+    let s = max(0, sec)
+    return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+}
+func hhmm(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: d) }
+
+struct TaskMonitor: View {
+    let t: J; let pupd: Date?; let isOpen: Bool
+    var body: some View {
+        let status = t["status"] as? String ?? "todo"
+        let steps = (t["steps"] as? [J]) ?? []
+        let stepsDone = steps.filter { ($0["status"] as? String) == "done" }.count
+        let pct: Int? = (t["progress"] as? NSNumber).map { max(0, min(100, $0.intValue)) } ?? (steps.isEmpty ? nil : 100 * stepsDone / steps.count)
+        let speed = t["speed"] as? String ?? "", waiting = t["waitingFor"] as? String ?? ""
+        let tupd = parseISO(t["updated"] as? String) ?? pupd
+        let active = status == "running" || status == "paused"
+        let showBar = pct != nil && (status != "todo" || (pct ?? 0) > 0)
+        let showSteps = !steps.isEmpty && (status != "done" || isOpen)
+        if showBar || showSteps || !speed.isEmpty || !waiting.isEmpty {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let now = ctx.date
+                let etaDate: Date? = parseISO(t["eta"] as? String) ?? ((t["etaSec"] as? NSNumber).map { (tupd ?? now).addingTimeInterval($0.doubleValue) })
+                let stale = tupd.map { Int(now.timeIntervalSince($0)) } ?? 0
+                VStack(alignment: .leading, spacing: 4) {
+                    if showBar, let pc = pct {
+                        HStack(spacing: 8) {
+                            GeometryReader { g in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.10))
+                                    RoundedRectangle(cornerRadius: 3).fill(status == "done" ? Ink.green : status == "failed" ? Ink.red : Ink.amber)
+                                        .frame(width: g.size.width * CGFloat(pc) / 100)
+                                }
+                            }.frame(height: 7)
+                            Text("\(pc)%").font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(Ink.text).frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                    if active || etaDate != nil || !speed.isEmpty {
+                        HStack(spacing: 12) {
+                            if active, let e = etaDate {
+                                let left = Int(e.timeIntervalSince(now))
+                                mono(left >= 0 ? "ETA \(hhmm(e)) · \(clock(left)) left" : "ETA passed \(clock(-left)) ago", left >= 0 ? Ink.text : Ink.red, 11)
+                            }
+                            if !speed.isEmpty { mono("speed " + speed, Ink.dim, 11) }
+                        }
+                    }
+                    if !waiting.isEmpty && status != "done" { mono("waiting for " + waiting, Ink.amber, 11) }
+                    if status == "running" && stale >= 120 { mono("no change for \(stale / 60) min", stale >= 600 ? Ink.red : Ink.amber, 11) }
+                    if showSteps {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(steps.enumerated()), id: \.offset) { _, s in
+                                let ss = s["status"] as? String ?? "todo"
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(ss == "done" ? "✓" : ss == "running" ? "●" : ss == "failed" ? "✕" : "○")
+                                        .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(ss == "done" ? Ink.green : ss == "running" ? Ink.amber : ss == "failed" ? Ink.red : Ink.grey).frame(width: 14)
+                                    Text(s["title"] as? String ?? "").font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(ss == "todo" ? Ink.dim : Ink.text).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }.padding(.top, 2)
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct TaskRow: View {
     @ObservedObject var m: Model
-    let slug: String; let t: J; let cmds: [J]
+    let slug: String; let t: J; let cmds: [J]; var pupd: Date? = nil
     @ViewBuilder func replyRow(n: Int, key: String, agent: String) -> some View {
         HStack(spacing: 6) {
                         TextField("message to this worker", text: Binding(get: { m.drafts[key] ?? "" }, set: { m.drafts[key] = $0 }))
@@ -392,6 +471,7 @@ struct TaskRow: View {
             }
             .contentShape(Rectangle()).onTapGesture { if isOpen { m.open.remove(key) } else { m.open.insert(key) } }
             .axButton("Task \(n) report", id: "task\(n)") { if isOpen { m.open.remove(key) } else { m.open.insert(key) } }
+            TaskMonitor(t: t, pupd: pupd, isOpen: isOpen).padding(.leading, 50)
             HStack(spacing: 8) {
                 Spacer().frame(width: 50)
                 mono("worker " + (agent.isEmpty ? "unknown" : agent), Ink.dim, 10.5).lineLimit(1)
@@ -453,6 +533,7 @@ struct PlanCard: View {
         let tasks = allTasks
         let shown = ["done", "running", "paused", "failed", "todo"].contains(m.solo) ? allTasks.filter { st($0) == m.solo } : allTasks
         let slug = p["slug"] as? String ?? ""
+        let pdate = parseISO(p["updated"] as? String) ?? Date(timeIntervalSinceNow: -Double(p["age"] as? Int ?? 0))
         let done = tasks.filter { st($0) == "done" }.count, run = tasks.filter { st($0) == "running" }.count
         let nowT = tasks.filter { st($0) == "running" || st($0) == "paused" }.map { "\($0["n"] as? Int ?? 0)" }
         let nextT = tasks.filter { st($0) == "todo" }.prefix(3).map { "\($0["n"] as? Int ?? 0)" }
@@ -475,13 +556,13 @@ struct PlanCard: View {
             if shown.isEmpty { mono("no task with this status", Ink.grey, 11) }
             if let f = focus {
                 Text("IN FOCUS").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.amber)
-                TaskRow(m: m, slug: slug, t: f, cmds: cmds).padding(10)
+                TaskRow(m: m, slug: slug, t: f, cmds: cmds, pupd: pdate).padding(10)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Ink.amber.opacity(0.08)))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.amber.opacity(0.5), lineWidth: 1))
                 Text("WORKERS IN THE BACKGROUND").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Ink.grey).padding(.top, 4)
             }
             ForEach(Array(rest.enumerated()), id: \.offset) { i, t in
-                TaskRow(m: m, slug: slug, t: t, cmds: cmds)
+                TaskRow(m: m, slug: slug, t: t, cmds: cmds, pupd: pdate)
                 if i < rest.count - 1 { Rectangle().fill(Ink.line).frame(height: 1) }
             }
         }
@@ -1238,6 +1319,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         if !args.contains("--login") { show() }
         model.start()
         startPhoneDoor()
+        Updater.checkAtStart()
     }
     func applicationWillTerminate(_ n: Notification) { phoneDoor?.terminate() }
     func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
