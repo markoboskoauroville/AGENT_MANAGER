@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ceo_labels.py: the CEO (Agent Manager) owns the "(label)" of every Claude Code session on this Mac.
-The BASE name (MAC_SES9_08-NOV) stays as the SessionStart hook gives it. The label is the momentary truth: what the session does
-RIGHT NOW, from its plan's focus task and its latest prompts, 1 to 3 words from ONE cheap Haiku call, only when that content changed
+The BASE name (mac9_14-11, before 14.11.2026 MAC_SES9_08-NOV) stays as the SessionStart hook gives it. The label is the momentary truth: what the session does
+RIGHT NOW, from its plan's focus task and its latest prompts, 1 to 4 lowercase words from ONE cheap Haiku call, only when that content changed
 and at most every 30 s per session. It is applied through the mechanism the old hook uses: the topic file
 ~/.claude/session-names/topic/<sid>, which the UserPromptSubmit hook turns into the title at the session's next prompt.
 A marker <sid>.ceo there makes session_topic.py stop its own Haiku step for that session.
@@ -84,8 +84,8 @@ def ask_haiku(focus, prompts, cur):
     q = ("What a Claude Code session is doing RIGHT NOW.\n"
          + (f"Plan task in focus: {focus}\n" if focus else "")
          + "Latest requests, oldest first:\n" + "\n".join(f"- {x[:260]}" for x in prompts if x)
-         + f"\nCurrent label: {cur or 'none'}.\nAnswer with a label of 1 to 3 words naming the concrete work of this moment "
-           "(for example: SANTOSHI SITE, CQ MIXER, VOICE ENGINE). Judge by the newest items, not the history. "
+         + f"\nCurrent label: {cur or 'none'}.\nAnswer with a label of 1 to 4 lowercase words naming the concrete work of this "
+           "moment (for example: santoshi site, cq mixer, tt update to better). Judge by the newest items, not the history. "
            "If the work is the same, repeat the current label exactly. Only the label, no quotes.")
     cwd = f"{HOME}/.claude/session-names/haiku"
     os.makedirs(cwd, exist_ok=True)
@@ -95,10 +95,11 @@ def ask_haiku(focus, prompts, cur):
     except Exception:
         return ""
     out = (r.stdout.strip().splitlines() or [""])[-1]
-    out = " ".join(re.sub(r"[^\w\-+. ]", "", out).split()).upper()
-    if cur and out == cur.upper():
+    # Marko, 14.11.2026: "parenthesis up to 4 words description" (mac1_14-11_(tt update to better)), lowercase
+    out = " ".join(re.sub(r"[^\w\-+. ]", "", out).split()).lower()
+    if cur and out == cur.lower():
         out = cur
-    return out if out and len(out.split()) <= 3 and len(out) <= 32 else ""
+    return out if out and len(out.split()) <= 4 and len(out) <= 40 else ""
 
 
 def run():

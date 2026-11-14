@@ -8,7 +8,7 @@ continue, but it's not piling up; it summarizes everything into one skill, and t
                                      for Marko, spend week, monitors/crons to re-arm, links
   mantra-master open [--plan P]      handoff, then a NEW iTerm2 window on the MacBook screen (no activate) running
                                      claude --session-id <new uuid> "<master prompt>" in ~/Developer/claude-code,
-                                     tab title "<SES name> (Master)", label "Master" written for the new id
+                                     tab title "<name>_(master)", e.g. mac2_14-11_(master), label "Master" written for the new id
                                      (--dry: write the files, compile the AppleScript, open nothing)
   mantra-master whoami               the session id and name this command runs in (walks up to ~/.claude/sessions)
   mantra-master monitor              the Agent Manager command Monitor line for THIS session's slug
@@ -38,7 +38,7 @@ def jread(p):
 
 
 def base(name):
-    return re.sub(r"\s*\([^)]*\)\s*$", "", name or "").strip()
+    return re.sub(r"[\s_]*\([^)]*\)\s*$", "", name or "").strip()   # mac2_14-11_(master) and MAC_SES2_14-NOV (Master)
 
 
 def slug(n):
@@ -251,7 +251,7 @@ def next_ses_name():
         n = int(open(f"{HOME}/.claude/session-names/MAC_{d.isoformat()}.count").read().strip() or 0) + 1
     except Exception:
         n = 1
-    return f"MAC_SES{n}_{d.day:02d}-{d.strftime('%b').upper()}"
+    return f"mac{n}_{d.day:02d}-{d.month:02d}"   # Marko 14.11.2026: mac1_14-11 (was MAC_SES1_14-NOV)
 
 
 def open_master(plan_arg=None, dry=False):
@@ -279,7 +279,7 @@ def open_master(plan_arg=None, dry=False):
             master_mark.register(sid)
     except Exception:
         pass
-    title = next_ses_name() + " (Master)"
+    title = next_ses_name() + "_(master)"
     b = macbook_bounds()
     front = subprocess.run(["osascript", "-l", "JavaScript", "-e",   # NSWorkspace: no Automation prompt for System Events
                             'ObjC.import("AppKit");$.NSWorkspace.sharedWorkspace.frontmostApplication.localizedName.js'],
