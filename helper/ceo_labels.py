@@ -16,6 +16,10 @@ HOME = os.path.expanduser("~")
 TOPIC = f"{HOME}/.claude/session-names/topic"
 LAB = f"{HOME}/.mantra-os/labels"
 MODEL = "claude-haiku-5-5"
+# 14.11.2026: the full path (an app or hook PATH has no ~/.local/bin; a bare "claude" was never found) and the label in
+# CAPITALS, 1 to 3 words (Marko: "one to three words, now in uppercase ... if you are in the same theme ... it stays").
+import shutil
+CLAUDE = shutil.which("claude") or next((p for p in (HOME + "/.local/bin/claude", "/opt/homebrew/bin/claude") if os.path.exists(p)), "claude")
 MIN_GAP = 30
 
 
@@ -81,17 +85,19 @@ def ask_haiku(focus, prompts, cur):
          + (f"Plan task in focus: {focus}\n" if focus else "")
          + "Latest requests, oldest first:\n" + "\n".join(f"- {x[:260]}" for x in prompts if x)
          + f"\nCurrent label: {cur or 'none'}.\nAnswer with a label of 1 to 3 words naming the concrete work of this moment "
-           "(for example: Santoshi site, CQ mixer, MPA teleprompter). Judge by the newest items, not the history. "
+           "(for example: SANTOSHI SITE, CQ MIXER, VOICE ENGINE). Judge by the newest items, not the history. "
            "If the work is the same, repeat the current label exactly. Only the label, no quotes.")
     cwd = f"{HOME}/.claude/session-names/haiku"
     os.makedirs(cwd, exist_ok=True)
     try:
-        r = subprocess.run(["claude", "-p", "--model", MODEL, "--setting-sources", "project", "--no-session-persistence", q],
+        r = subprocess.run([CLAUDE, "-p", "--model", MODEL, "--setting-sources", "project", "--no-session-persistence", q],
                            cwd=cwd, capture_output=True, text=True, timeout=60, env=dict(os.environ, MANTRA_TOPIC_CHILD="1"))
     except Exception:
         return ""
     out = (r.stdout.strip().splitlines() or [""])[-1]
-    out = re.sub(r"[^\w\-+. ]", "", out).strip()
+    out = " ".join(re.sub(r"[^\w\-+. ]", "", out).split()).upper()
+    if cur and out == cur.upper():
+        out = cur
     return out if out and len(out.split()) <= 3 and len(out) <= 32 else ""
 
 
