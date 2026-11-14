@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 27
+let VERSION = 28
 let APP_NAME = "Agent Manager (Mantra)"
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
@@ -971,8 +971,10 @@ struct CloudPanel: View {
 }
 
 // ---------------------------------------------------------------- the window
+var shotAdvanced = false
 struct TopRow: View {
     @AppStorage("onTop") private var onTop = false
+    @AppStorage("simpleView") private var simple = true
     var body: some View {
         ZStack {
             (Text("Agent Manager").fontWeight(.bold) + Text(" (CEO) (Mantra)").fontWeight(.regular)).font(.system(size: 15)).foregroundStyle(Ink.text)
@@ -982,6 +984,13 @@ struct TopRow: View {
                 Text("OFF").foregroundStyle(Ink.grey).contentShape(Rectangle()).onTapGesture { NSApp.terminate(nil) }
                     .axButton("Off", id: "off") { DispatchQueue.main.async { NSApp.terminate(nil) } }
                 Spacer()
+                HStack(spacing: 6) {
+                    Text("SIMPLE").foregroundStyle(simple && !shotAdvanced ? Ink.green : Ink.grey)
+                    Text("|").foregroundStyle(Ink.line)
+                    Text("ADVANCED").foregroundStyle(simple && !shotAdvanced ? Ink.grey : Ink.green)
+                }.padding(.horizontal, 7).padding(.vertical, 3).contentShape(Rectangle())
+                    .onTapGesture { simple.toggle() }
+                    .axButton("Simple or advanced view", id: "viewmode", value: simple ? "simple" : "advanced") { simple.toggle() }
                 Text("TOP").foregroundStyle(onTop ? Ink.green : Ink.grey).contentShape(Rectangle())
                     .onTapGesture { onTop.toggle(); TopRow.float(onTop) }
                     .axButton("Top", id: "top", value: onTop ? "on" : "off") { onTop.toggle(); TopRow.float(onTop) }
@@ -1215,6 +1224,91 @@ struct RunningColumn: View {
     }
 }
 
+// ---------------------------------------------------------------- SIMPLE view (v28, 14.11.2026): a news broadcast, NOW / COMING UP / DONE
+// Marko: "I am just seeing, as a news broadcast, what's happening in this time and what's coming up ... I get overwhelmed."
+struct SimpleItem { let title: String; let step: String; let pct: Int?; let left: Int?; let waiting: String; let paused: Bool }
+
+/// only waitingFor texts that name Marko himself (Marko / you / his hand) count as "waiting for Marko"
+func waitsForMarko(_ w: String) -> Bool {
+    let l = " " + w.lowercased() + " "
+    return ["marko", " you ", " you:", " your ", "his hand", "his thumb"].contains { l.contains($0) }
+}
+func markoLine(_ w: String) -> String {
+    var x = w.trimmingCharacters(in: .whitespaces)
+    for pre in ["marko:", "marko -", "marko"] where x.lowercased().hasPrefix(pre) { x = String(x.dropFirst(pre.count)).trimmingCharacters(in: CharacterSet(charactersIn: " :-")); break }
+    return x
+}
+
+struct SimpleView: View {
+    let plans: [J]
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { ctx in
+            let now = ctx.date, cal = Calendar.current
+            let fresh = plans.filter { p in
+                let u = parseISO(p["updated"] as? String) ?? Date(timeIntervalSinceNow: -Double(p["age"] as? Int ?? 0))
+                return cal.isDate(u, inSameDayAs: now) && now.timeIntervalSince(u) < 3 * 3600
+            }
+            let tasks = fresh.flatMap { p in ((p["tasks"] as? [J]) ?? []).map { ($0, parseISO(p["updated"] as? String)) } }
+            let live = tasks.filter { ["running", "paused"].contains(st($0.0)) }
+            let marko = tasks.filter { st($0.0) != "done" && waitsForMarko($0.0["waitingFor"] as? String ?? "") }
+            let nowItems: [SimpleItem] = live.map { (t, pu) in
+                let steps = (t["steps"] as? [J]) ?? []
+                let cur = steps.first { ($0["status"] as? String) == "running" }?["title"] as? String ?? ""
+                let sd = steps.filter { ($0["status"] as? String) == "done" }.count
+                let pct: Int? = (t["progress"] as? NSNumber).map { max(0, min(100, $0.intValue)) } ?? (steps.isEmpty ? nil : 100 * sd / steps.count)
+                let tu = parseISO(t["updated"] as? String) ?? pu
+                let eta = parseISO(t["eta"] as? String) ?? ((t["etaSec"] as? NSNumber).map { (tu ?? now).addingTimeInterval($0.doubleValue) })
+                let w = t["waitingFor"] as? String ?? ""
+                return SimpleItem(title: t["title"] as? String ?? "", step: cur, pct: pct, left: eta.map { Int($0.timeIntervalSince(now)) }, waiting: waitsForMarko(w) ? "" : w, paused: st(t) == "paused")
+            }
+            let coming = tasks.filter { st($0.0) == "todo" }.sorted { ($0.0["n"] as? Int ?? 0) < ($1.0["n"] as? Int ?? 0) }.prefix(5).map { $0.0["title"] as? String ?? "" }
+            let done = tasks.filter { t in st(t.0) == "done" && (parseISO(t.0["doneAt"] as? String).map { cal.isDate($0, inSameDayAs: now) } ?? false) }
+                .sorted { ($0.0["doneAt"] as? String ?? "") > ($1.0["doneAt"] as? String ?? "") }.prefix(5).map { $0.0["title"] as? String ?? "" }
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 22) {
+                    if let first = marko.first {
+                        Text("Marko: " + markoLine(first.0["waitingFor"] as? String ?? ""))
+                            .font(.system(size: 22, weight: .bold)).foregroundStyle(Ink.orange).fixedSize(horizontal: false, vertical: true)
+                            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Ink.orange.opacity(0.12)))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Ink.orange.opacity(0.7), lineWidth: 1))
+                    }
+                    head("NOW")
+                    if nowItems.isEmpty { Text("Nothing is running right now.").font(.system(size: 20)).foregroundStyle(Ink.dim) }
+                    ForEach(Array(nowItems.enumerated()), id: \.offset) { _, it in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(it.title).font(.system(size: 22, weight: .semibold)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
+                            if !it.step.isEmpty { Text(it.step).font(.system(size: 17)).foregroundStyle(Ink.dim).fixedSize(horizontal: false, vertical: true) }
+                            if let pc = it.pct {
+                                GeometryReader { g in ZStack(alignment: .leading) {
+                                    Capsule().fill(Color.white.opacity(0.10))
+                                    Capsule().fill(Ink.amber).frame(width: g.size.width * CGFloat(pc) / 100)
+                                } }.frame(height: 5)
+                            }
+                            if let l = it.left, l > 0 { Text("about \(max(1, Int((Double(l) / 60).rounded()))) min left").font(.system(size: 16)).foregroundStyle(Ink.text) }
+                            if it.paused { Text("paused").font(.system(size: 16)).foregroundStyle(Ink.grey) }
+                            if !it.waiting.isEmpty { Text("waiting for " + it.waiting).font(.system(size: 16)).foregroundStyle(Ink.grey).fixedSize(horizontal: false, vertical: true) }
+                        }
+                    }
+                    if !coming.isEmpty {
+                        head("COMING UP")
+                        ForEach(Array(coming.enumerated()), id: \.offset) { _, t in
+                            Text(t).font(.system(size: 19)).foregroundStyle(Ink.text).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if !done.isEmpty {
+                        head("DONE")
+                        ForEach(Array(done.enumerated()), id: \.offset) { _, t in
+                            Text(t).font(.system(size: 19)).strikethrough(true, color: Ink.grey).foregroundStyle(Ink.grey).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }.padding(28).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+    }
+    func head(_ w: String) -> some View { Text(w).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(Ink.green).padding(.top, 4) }
+}
+
 struct Root: View {
     @ObservedObject var m: Model
     let margin: CGFloat = 16
@@ -1223,9 +1317,12 @@ struct Root: View {
         if ["done", "running", "paused", "failed", "todo"].contains(solo) { return (((p["tasks"] as? [J]) ?? []).contains { st($0) == solo }) }
         return true
     }
+    @AppStorage("simpleView") private var simple = true
     var body: some View {
         VStack(spacing: 0) {
             TopRow().padding(.horizontal, 12).padding(.top, 6)
+            if simple && !shotAdvanced { SimpleView(plans: (m.data["plans"] as? [J]) ?? []) }
+            else {
             UsageHeader(data: m.data)
             HStack(spacing: 0) {
             RunningColumn(m: m)
@@ -1272,6 +1369,7 @@ struct Root: View {
                 BlockerColumn(m: m)
             }
             }
+            }
         }
         .ignoresSafeArea(.container, edges: .top)
         .background(Ink.ground)
@@ -1303,6 +1401,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             else { model.data = try! JSONSerialization.jsonObject(with: Data(sampleJSON.utf8)) as! J }
             if let mac = model.data["mac"] as? J, let pl = mac["plans"] { model.data["plans"] = pl }   // the sample keeps its plan inside "mac"
             model.stamp = (model.data["time"] as? String) ?? "?"
+            if args.contains("--advanced") { shotAdvanced = true }
             if args.contains("--fake-blockers") { model.data["blockers"] = [["id": "x1", "kind": "keychain", "text": "A macOS password prompt is on screen.", "who": "macOS", "task": 0, "age": 720, "where": "app:SecurityAgent", "hint": "Type your login password and press Always Allow."] as J, ["id": "x2", "kind": "question", "text": "Which voice should I use?", "who": "suno-chakra", "task": 38, "age": 90, "where": "session:Master", "hint": "Answer in that session."] as J] }
             if let k = args.firstIndex(of: "--solo"), k + 1 < args.count { model.solo = args[k + 1] }
             var width: CGFloat = 1180
