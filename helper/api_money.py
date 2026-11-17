@@ -112,6 +112,9 @@ def status():
     rows = ledger()
     today = datetime.date.today().isoformat()
     spent = sum(r.get("cost", 0) for r in rows)
+    for f in glob.glob(HOME + "/.cache/claude-api-sessions/*.json"):   # interactive API sessions, written by the status line
+        try: spent += float(json.load(open(f)).get("cost", 0) or 0)
+        except Exception: pass
     spent_today = sum(r.get("cost", 0) for r in rows if r.get("ts", "").startswith(today))
     first = min((r["ts"] for r in rows if r.get("ts")), default=None)
     d = max(1.0, (time.time() - datetime.datetime.fromisoformat(first).timestamp()) / 86400) if first else None
