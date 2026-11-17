@@ -6,7 +6,7 @@
 import SwiftUI
 import AppKit
 
-let VERSION = 28
+let VERSION = 29
 let APP_NAME = "Agent Manager (Mantra)"
 
 // ---------------------------------------------------------------- look (CAMERA family: dark ground, mono words)
@@ -1173,8 +1173,6 @@ struct UsageHeader: View {
 /// what works right now: busy sessions and running agents only; gone the moment they stop (no idle rows, v19); no model label when unknown
 func runningRows(_ d: J) -> [(String, String, String, Bool, Bool)] {   // (name, what, model, isAgent, busy)
     var out: [(String, String, String, Bool, Bool)] = []
-    var seen = Set<String>()
-    let macSessions = ((d["mac"] as? J)?["sessions"] as? [J]) ?? []
     for r in ((d["sessions_all"] as? J)?["rows"] as? [J]) ?? [] {
         let state = r["state"] as? String ?? "", dev = r["device"] as? String ?? ""
         guard state == "busy" else { continue }
@@ -1183,12 +1181,6 @@ func runningRows(_ d: J) -> [(String, String, String, Bool, Bool)] {   // (name,
         let model = (state == "busy" ? mo["current_model"] as? String : nil) ?? mo["model"] as? String ?? ""
         let last = (r["last"] as? String) ?? ""
         out.append((name, (dev.isEmpty ? "" : dev + " · ") + state + (last.isEmpty ? "" : " · " + last), model, false, state == "busy"))
-    }
-    for s in macSessions {
-        for t in (s["tasks"] as? [J]) ?? [] where (t["kind"] as? String) == "agent" && ((t["running"] as? Bool) ?? false) {
-            let id = t["id"] as? String ?? ""; seen.insert(id)
-            out.append((t["desc"] as? String ?? "agent", "agent of " + ((s["base"] as? String) ?? (s["name"] as? String ?? "")), t["model"] as? String ?? "", true, true))
-        }
     }
     return out
 }
@@ -1201,7 +1193,7 @@ struct RunningColumn: View {
             Text("RUNNING").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Ink.green).accessibilityIdentifier("running-title")
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 8) {
-                    if rows.isEmpty { mono("Nothing is running", Ink.grey, 12) }
+                    if rows.isEmpty && workerRows(m.data, dismissed: []).isEmpty { mono("Nothing is running", Ink.grey, 12) }
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
@@ -1217,6 +1209,7 @@ struct RunningColumn: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Ink.line, lineWidth: 1))
                     }
+                    WorkersBlock(data: m.data)
                 }.padding(.trailing, 2)
             }
         }
@@ -1241,6 +1234,7 @@ func markoLine(_ w: String) -> String {
 
 struct SimpleView: View {
     let plans: [J]
+    let data: J
     var body: some View {
         TimelineView(.periodic(from: .now, by: 5)) { ctx in
             let now = ctx.date, cal = Calendar.current
@@ -1273,6 +1267,7 @@ struct SimpleView: View {
                             .background(RoundedRectangle(cornerRadius: 10).fill(Ink.orange.opacity(0.12)))
                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Ink.orange.opacity(0.7), lineWidth: 1))
                     }
+                    WorkersBlock(data: data)
                     head("NOW")
                     if nowItems.isEmpty { Text("Nothing is running right now.").font(.system(size: 20)).foregroundStyle(Ink.dim) }
                     ForEach(Array(nowItems.enumerated()), id: \.offset) { _, it in
@@ -1321,7 +1316,7 @@ struct Root: View {
     var body: some View {
         VStack(spacing: 0) {
             TopRow().padding(.horizontal, 12).padding(.top, 6)
-            if simple && !shotAdvanced { SimpleView(plans: (m.data["plans"] as? [J]) ?? []) }
+            if simple && !shotAdvanced { SimpleView(plans: (m.data["plans"] as? [J]) ?? [], data: m.data) }
             else {
             UsageHeader(data: m.data)
             HStack(spacing: 0) {
@@ -1395,6 +1390,23 @@ final class Delegate: NSObject, NSApplicationDelegate {
         window.title = ""; window.identifier = NSUserInterfaceItemIdentifier("agentmanager"); window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden; window.titlebarSeparatorStyle = .none
         window.contentView = host; window.minSize = NSSize(width: 900, height: 480); window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("AgentManagerWindow"); window.backgroundColor = NSColor(Ink.ground)
+        // --open-stream <worker id>: opens that worker's stream window at start (tests)
+        if let k = args.firstIndex(of: "--open-stream"), k + 1 < args.count {
+            let wid = args[k + 1]
+            DispatchQueue.global().async {
+                guard let d = collect().flatMap({ try? JSONSerialization.jsonObject(with: $0) as? J }) else { return }
+                for w in workerRows(d, dismissed: []) where w.id.hasPrefix(wid) { DispatchQueue.main.async { StreamWindows.show(id: w.id, title: w.desc, path: w.path) }; break }
+            }
+        }
+        // --shot-stream <png> --stream <transcript.jsonl>: the stream pane drawn off screen from the start of a file
+        if let i = args.firstIndex(of: "--shot-stream"), i + 1 < args.count, let k = args.firstIndex(of: "--stream"), k + 1 < args.count {
+            let st = StreamStore(path: args[k + 1]); st.loadAllSync()
+            let h2 = NSHostingView(rootView: StreamView(store: st, title: "Stream", windowId: "shot"))
+            h2.frame = NSRect(x: 0, y: 0, width: 760, height: 640); h2.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+            if let rep = h2.bitmapImageRepForCachingDisplay(in: h2.bounds) { h2.cacheDisplay(in: h2.bounds, to: rep); try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[i + 1])) }
+            exit(0)
+        }
         // --shot <png>: drawn off screen at the minimum size (sample data, no network, nothing stored); --shot-live: the real data once
         if let i = args.firstIndex(where: { $0 == "--shot" || $0 == "--shot-live" }), i + 1 < args.count {
             if args[i] == "--shot-live" { model.data = (collect().flatMap { try? JSONSerialization.jsonObject(with: $0) as? J }) ?? [:] }

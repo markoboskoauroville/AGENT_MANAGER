@@ -7,6 +7,11 @@ No secrets, no addresses: hosts are names (chromium-vm, via ssh over the tailnet
 import glob, json, os, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # python -I has no script dir; worker_watch.py sits beside this file
+try:
+    import worker_watch as WW
+except Exception:
+    WW = None
 HOME = os.path.expanduser("~")
 NOW = time.time()
 ADB = next((p for p in (HOME + "/Library/Android/sdk/platform-tools/adb", "/opt/homebrew/bin/adb", "/usr/local/bin/adb") if os.path.exists(p)), "adb")
@@ -178,6 +183,12 @@ def mac():
                     t["model"] = m.get("model") or None
                 except Exception:
                     pass
+                tr = os.path.realpath(f)   # heartbeat: read locally from the transcript tail (zero credits), Marko 17.11.2026
+                t["transcript"] = tr
+                hb = WW.heartbeat(tr) if WW else None
+                if hb:
+                    t.update(hb)
+                    t["running"] = hb["state"] == "running" and hb["last_event_age_s"] < 1800
             else:
                 try:
                     with open(f, "rb") as fh:
@@ -205,7 +216,7 @@ def mac():
             modes["current_model"], modes["current_source"] = bar["model"], "status line"
         else:
             modes["current_model"], modes["current_source"] = short_model(jread(HOME + "/.claude/settings.json").get("model")), "configured model (settings)"
-        workers = [{"id": t["id"], "model": t.get("model"), "desc": t.get("desc", "")} for t in tasks if t["kind"] == "agent" and t["running"]]
+        workers = [{"id": t["id"], "model": t.get("model"), "desc": t.get("desc", ""), "last_event_age_s": t.get("last_event_age_s"), "current_action": t.get("current_action", ""), "state": t.get("state")} for t in tasks if t["kind"] == "agent" and t["running"]]
         out["sessions"].append({"label": labels_state().get(sid), "base": s.get("base"), "workers": workers, "modes": modes, "name": s.get("name"), "sid": sid, "pid": s.get("pid"), "folder": s.get("cwd", "").replace(HOME, "~"),
                                 "status": s.get("status"), "last": (s.get("last") or "")[:160], "tasks": tasks[:12],
                                 "tasks_total": len(tasks), "tasks_running": sum(1 for t in tasks if t["running"])})
@@ -467,6 +478,10 @@ def main():
     res["blockers_archived"] = blockers("--archived")
     res["sessions_all"] = merge_sessions(res)
     res["time"] = time.strftime("%H:%M:%S")
+    # heartbeat of every background worker on this Mac (phone app and other sessions read it: /workers on the door)
+    res["workers"] = [{"id": t["id"], "description": t.get("desc", ""), "model": t.get("model"), "session": s.get("name"), "state": t.get("state"),
+                       "last_event_age_s": t.get("last_event_age_s"), "current_action": t.get("current_action", "")}
+                      for s in res["mac"].get("sessions", []) for t in s.get("tasks", []) if t.get("kind") == "agent" and t.get("running")]
     if "--text" in sys.argv:
         m = res["mac"]
         for s in m.get("sessions", []):
@@ -483,6 +498,8 @@ def main():
             print(f"net  {d['name']} ({d['os']}): {'online' if d['online'] else 'offline'}")
         for r in res["sessions_all"]["rows"]:
             print(f"sess {r['device']}: {r['name']} [{r['kind']}] {r['state']} ({r['source']})")
+        for w in res["workers"]:
+            print(f"worker {w['id']} {w['description']}: alive, last action {w['last_event_age_s']}s ago, {w['current_action']}")
         for c in res["cloud"]["items"]:
             print(f"cloud {c['name']} ({c['age']}s ago)")
     else:

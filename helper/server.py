@@ -166,6 +166,7 @@ class H(BaseHTTPRequestHandler):
             try: since = int(self.path.split("since=")[1].split("&")[0])
             except Exception: since = -1
             return self._send(200, live(since))
+        if path == "/workers": return self._send(200, (_cache["data"] or {}).get("workers", []))
         if path == "/plans": return self._send(200, plans())
         if path == "/blockers":
             b = (_cache["data"] or {}).get("blockers")
