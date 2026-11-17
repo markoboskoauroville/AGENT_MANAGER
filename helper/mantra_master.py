@@ -271,15 +271,7 @@ def open_master(plan_arg=None, dry=False):
     sh = MASTER + f"/start-master{sfx}.sh"
     open(sh, "w").write("#!/bin/zsh -l\ncd ~/Developer/claude-code\nexec claude --session-id %s \"$(cat %s/prompt%s.txt)\"\n" % (sid, MASTER, sfx))
     os.chmod(sh, 0o755)
-    try:   # the label is written before the session starts; its first prompt turns it into "<BASE> (Master)"
-        if not dry:
-            subprocess.run(["/usr/bin/python3", LABELS, "set", sid, "Master"], capture_output=True, timeout=10)
-            sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-            import master_mark   # 10.11.2026: the button's session is the Master (registry + marker)
-            master_mark.register(sid)
-    except Exception:
-        pass
-    title = next_ses_name() + "_(master)"
+    title = next_ses_name()   # 17.11.2026: no (master) label any more
     b = macbook_bounds()
     front = subprocess.run(["osascript", "-l", "JavaScript", "-e",   # NSWorkspace: no Automation prompt for System Events
                             'ObjC.import("AppKit");$.NSWorkspace.sharedWorkspace.frontmostApplication.localizedName.js'],
